@@ -1,11 +1,11 @@
 const { Pool } = require('pg');
 
 // Create a connection pool to the Postgres database
-// First try DATABASE_URL (internal Railway connection)
-// Then try DATABASE_PUBLIC_URL (external connection)
+// First try DATABASE_PUBLIC_URL (external connection that should always work)
+// Then try DATABASE_URL (internal Railway connection)
 // Fall back to POSTGRES_URL (custom)
-const connectionString = process.env.DATABASE_URL || 
-                         process.env.DATABASE_PUBLIC_URL || 
+const connectionString = process.env.DATABASE_PUBLIC_URL || 
+                         process.env.DATABASE_URL || 
                          process.env.POSTGRES_URL;
 
 // Dummy pool for when we're running without a database
@@ -19,6 +19,8 @@ let pool;
 // Only create a real pool if we have a connection string
 if (connectionString) {
   try {
+    console.log(`Connecting to database using: ${connectionString.replace(/:[^:]*@/, ':****@')}`);
+    
     pool = new Pool({
       connectionString,
       ssl: {
