@@ -6,8 +6,8 @@ const { createHumanizeTables } = require('../db/migrations/humanize_tables');
 
 const router = express.Router();
 
-// Real humanizer API endpoint - use environment variable or default to our specific endpoint
-const HUMANIZER_API_URL = process.env.HUMANIZER_API_URL || 'https://andikar-backend-code-production.up.railway.app';
+// Real humanizer API endpoint - use environment variable or default to specific endpoint
+const HUMANIZER_API_URL = process.env.HUMANIZER_API_URL || 'https://web-production-3db6c.up.railway.app';
 const HUMANIZE_TEXT_ENDPOINT = '/humanize_text'; // The specific endpoint path
 
 // Initialize the humanize tables
