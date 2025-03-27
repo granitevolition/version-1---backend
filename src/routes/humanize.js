@@ -6,8 +6,9 @@ const { createHumanizeTables } = require('../db/migrations/humanize_tables');
 
 const router = express.Router();
 
-// Real humanizer API endpoint
-const HUMANIZER_API_URL = process.env.HUMANIZER_API_URL || 'https://web-production-3db6c.up.railway.app';
+// Real humanizer API endpoint - use environment variable or default to our specific endpoint
+const HUMANIZER_API_URL = process.env.HUMANIZER_API_URL || 'https://andikar-backend-code-production.up.railway.app';
+const HUMANIZE_TEXT_ENDPOINT = '/humanize_text'; // The specific endpoint path
 
 // Initialize the humanize tables
 async function initializeTables() {
@@ -39,7 +40,7 @@ router.post('/humanize-text', async (req, res) => {
       });
     }
 
-    console.log(`Humanizing text (${text.length} chars). Calling API at: ${HUMANIZER_API_URL}/humanize_text`);
+    console.log(`Humanizing text (${text.length} chars). Calling API at: ${HUMANIZER_API_URL}${HUMANIZE_TEXT_ENDPOINT}`);
     
     // Get user if authenticated
     let userId = null;
@@ -121,8 +122,8 @@ router.post('/humanize-text', async (req, res) => {
     }
     
     // Forward request to the real humanizer API
-    // Make sure we're using the correct endpoint: /humanize_text
-    const apiUrl = `${HUMANIZER_API_URL}/humanize_text`;
+    // Make sure we're using the correct endpoint
+    const apiUrl = `${HUMANIZER_API_URL}${HUMANIZE_TEXT_ENDPOINT}`;
     console.log(`Sending request to: ${apiUrl}`);
     
     try {
@@ -408,6 +409,9 @@ router.get('/history', async (req, res) => {
 
 // Simple health check for this service
 router.get('/health', (req, res) => {
+  // Log which URL we're using for the humanizer API
+  console.log(`Checking humanizer API health at: ${HUMANIZER_API_URL}/health`);
+  
   // Test the humanizer API
   axios.get(`${HUMANIZER_API_URL}/health`, { timeout: 5000 })
     .then(response => {
@@ -422,6 +426,7 @@ router.get('/health', (req, res) => {
       });
     })
     .catch(error => {
+      console.error('Error checking humanizer API health:', error.message);
       res.json({
         status: 'degraded',
         database: db.hasConnection ? 'connected' : 'disconnected',
