@@ -2,12 +2,26 @@
 
 This is the backend API for the Version 1 user registration and management system. It provides authentication, user management, and text humanization services backed by PostgreSQL.
 
-## Recent Fixes
+## Recent Database Connection Fixes (March 27, 2025)
 
-We've recently improved database connectivity and error handling:
+We've resolved the database connectivity issues by:
+
+1. **Fixed Database Connection String**
+   - Updated to use DATABASE_PUBLIC_URL instead of DATABASE_URL
+   - Fixed the hostname resolution issue with postgres.railway.internal
+   - Added fallback logic to try different connection strings if one fails
+
+2. **Updated Humanizer API Integration**
+   - Set the specific humanizer API URL to: https://andikar-backend-code-production.up.railway.app
+   - Made sure the correct endpoint path is used: /humanize_text
+
+3. **Environment Configuration**
+   - Added proper .env file with the correct connection details
+   - Set appropriate environment variables for production deployment
+
+## Earlier Database Fixes
 
 1. **Database Connection Management**
-   - Fixed the database connectivity issues
    - Enhanced connection state tracking using getters
    - Added automatic connection recovery
    - Implemented periodic connection health checks
@@ -34,7 +48,7 @@ We've recently improved database connectivity and error handling:
 Create a `.env` file based on the provided `.env.example` with your specific configuration:
 
 ```
-DATABASE_URL=postgresql://postgres:password@hostname:port/database
+DATABASE_PUBLIC_URL=postgresql://postgres:password@hostname:port/database
 PORT=5000
 NODE_ENV=production
 ```
@@ -60,8 +74,8 @@ For Railway deployment, ensure the PostgreSQL database is properly linked, and t
 If you see "Database connection is not available" errors:
 
 1. **Check Environment Variables**
-   - Verify DATABASE_URL, DATABASE_PUBLIC_URL, or POSTGRES_URL is correctly set
-   - The application tries these variables in order
+   - Verify DATABASE_PUBLIC_URL is correctly set
+   - Ensure you are using the public-facing database URL, not the internal one
    - The URL should have the format: `postgresql://username:password@hostname:port/database`
 
 2. **Check PostgreSQL Connection**
@@ -116,7 +130,7 @@ The server logs important events and errors. For deployment diagnostics, look fo
 
 ### Humanization
 
-- `POST /api/v1/humanize` - Humanize text
+- `POST /api/v1/humanize/humanize-text` - Humanize text
 - `GET /api/v1/humanize/stats` - Get usage statistics
 - `GET /api/v1/humanize/history` - Get usage history
 
