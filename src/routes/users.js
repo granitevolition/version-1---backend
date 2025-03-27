@@ -29,9 +29,23 @@ const validatePassword = (password) => {
   return null;
 };
 
+// Email validation function
+const validateEmail = (email) => {
+  if (!email) {
+    return null; // Email is optional
+  }
+  
+  const emailRegex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+  if (!emailRegex.test(email)) {
+    return 'Please enter a valid email address';
+  }
+  
+  return null;
+};
+
 // Register a new user
 router.post('/register', async (req, res, next) => {
-  console.log('Registration request received:', req.body);
+  console.log('Registration request received:', { ...req.body, password: '[REDACTED]' });
   try {
     // Check if database connection is available
     if (!db.hasConnection) {
@@ -42,7 +56,7 @@ router.post('/register', async (req, res, next) => {
       });
     }
 
-    const { username, password } = req.body;
+    const { username, password, email, phone } = req.body;
     console.log('Processing registration for username:', username);
     
     // Validate username
@@ -60,6 +74,15 @@ router.post('/register', async (req, res, next) => {
       return res.status(400).json({ 
         error: 'Bad Request',
         message: passwordError
+      });
+    }
+    
+    // Validate email if provided
+    const emailError = validateEmail(email);
+    if (emailError) {
+      return res.status(400).json({ 
+        error: 'Bad Request',
+        message: emailError
       });
     }
     
@@ -84,11 +107,15 @@ router.post('/register', async (req, res, next) => {
             id SERIAL PRIMARY KEY,
             username VARCHAR(50) UNIQUE NOT NULL,
             password_hash VARCHAR(255) NOT NULL,
+            email VARCHAR(255) UNIQUE,
+            phone VARCHAR(20),
             created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-            updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+            last_login TIMESTAMP WITH TIME ZONE
           );
           
           CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+          CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
         `);
         
         console.log('Users table created successfully');
@@ -110,6 +137,21 @@ router.post('/register', async (req, res, next) => {
         });
       }
       
+      // Check if email already exists (if provided)
+      if (email) {
+        const existingEmail = await db.query(
+          'SELECT * FROM users WHERE email = $1',
+          [email]
+        );
+        
+        if (existingEmail.rows.length > 0) {
+          return res.status(409).json({ 
+            error: 'Conflict',
+            message: 'Email already in use. Please use another email address.' 
+          });
+        }
+      }
+      
       // Hash the password
       const salt = await bcrypt.genSalt(10);
       const passwordHash = await bcrypt.hash(password, salt);
@@ -118,14 +160,28 @@ router.post('/register', async (req, res, next) => {
       
       // Insert the new user
       console.log('Attempting to insert user into database...');
-      const insertQuery = 'INSERT INTO users (username, password_hash) VALUES ($1, $2) RETURNING id, username, created_at';
-      const insertValues = [username, passwordHash];
+      let insertQuery, insertValues;
+      
+      // Different query based on whether email and phone are provided
+      if (email && phone) {
+        insertQuery = 'INSERT INTO users (username, password_hash, email, phone) VALUES ($1, $2, $3, $4) RETURNING id, username, email, phone, created_at';
+        insertValues = [username, passwordHash, email, phone];
+      } else if (email) {
+        insertQuery = 'INSERT INTO users (username, password_hash, email) VALUES ($1, $2, $3) RETURNING id, username, email, created_at';
+        insertValues = [username, passwordHash, email];
+      } else if (phone) {
+        insertQuery = 'INSERT INTO users (username, password_hash, phone) VALUES ($1, $2, $3) RETURNING id, username, phone, created_at';
+        insertValues = [username, passwordHash, phone];
+      } else {
+        insertQuery = 'INSERT INTO users (username, password_hash) VALUES ($1, $2) RETURNING id, username, created_at';
+        insertValues = [username, passwordHash];
+      }
+      
       console.log('Insert query:', insertQuery);
-      console.log('Insert values:', [username, '***REDACTED***']);
+      console.log('Insert values:', [username, '***REDACTED***', email, phone].filter(Boolean));
       
       const result = await db.query(insertQuery, insertValues);
       
-      console.log('Insert query result:', result);
       console.log('Insert rows:', result.rows);
       
       // Check if insertion was successful
@@ -141,6 +197,8 @@ router.post('/register', async (req, res, next) => {
       res.status(201).json({
         id: newUser.id,
         username: newUser.username,
+        email: newUser.email,
+        phone: newUser.phone,
         created_at: newUser.created_at,
         message: 'User registered successfully'
       });
@@ -149,12 +207,19 @@ router.post('/register', async (req, res, next) => {
       console.error('Database operation failed:', dbError.message);
       console.error(dbError.stack);
       
-      // Check if the error is a duplicate key violation (username already exists)
+      // Check if the error is a duplicate key violation
       if (dbError.code === '23505') { // PostgreSQL unique violation code
-        return res.status(409).json({
-          error: 'Conflict',
-          message: 'Username already exists. Please choose another username.'
-        });
+        if (dbError.message.includes('email')) {
+          return res.status(409).json({
+            error: 'Conflict',
+            message: 'Email already in use. Please use another email address.'
+          });
+        } else {
+          return res.status(409).json({
+            error: 'Conflict',
+            message: 'Username already exists. Please choose another username.'
+          });
+        }
       }
       
       // Check if the error is related to missing tables
@@ -191,8 +256,41 @@ router.get('/:id', async (req, res, next) => {
     
     // Get user by ID
     const result = await db.query(
-      'SELECT id, username, created_at FROM users WHERE id = $1',
+      'SELECT id, username, email, phone, created_at, last_login FROM users WHERE id = $1',
       [id]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        error: 'Not Found',
+        message: 'User not found'
+      });
+    }
+    
+    res.status(200).json(result.rows[0]);
+    
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Get user by username
+router.get('/username/:username', async (req, res, next) => {
+  try {
+    const { username } = req.params;
+    
+    // Check if database connection is available
+    if (!db.hasConnection) {
+      return res.status(503).json({
+        error: 'Service Unavailable',
+        message: 'Database connection is not available.'
+      });
+    }
+    
+    // Get user by username
+    const result = await db.query(
+      'SELECT id, username, email, phone, created_at, last_login FROM users WHERE username = $1',
+      [username]
     );
     
     if (result.rows.length === 0) {
