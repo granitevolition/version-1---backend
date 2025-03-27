@@ -35,27 +35,35 @@ router.post('/login', async (req, res, next) => {
     }
     
     try {
-      // First check if the users table exists
-      const tableCheck = await db.query(`
-        SELECT EXISTS (
-          SELECT FROM information_schema.tables 
-          WHERE table_schema = 'public' 
-          AND table_name = 'users'
-        );
-      `);
+      // First make sure the users table exists
+      const userTableExists = await checkTableExists('users');
       
-      if (!tableCheck.rows[0].exists) {
+      if (!userTableExists) {
         return res.status(500).json({
           error: 'Database Setup Error',
           message: 'The users table does not exist in the database.'
         });
       }
       
+      // Get the columns that exist in the users table
+      const userColumns = await getTableColumns('users');
+      console.log('Available columns in users table:', userColumns);
+      
+      // Build a query based on available columns
+      let query = 'SELECT id, username, password_hash';
+      
+      // Add email and phone fields if they exist
+      if (userColumns.includes('email')) {
+        query += ', email';
+      }
+      if (userColumns.includes('phone')) {
+        query += ', phone';
+      }
+      
+      query += ' FROM users WHERE username = $1';
+      
       // Get user by username
-      const userResult = await db.query(
-        'SELECT id, username, password_hash FROM users WHERE username = $1',
-        [username]
-      );
+      const userResult = await db.query(query, [username]);
       
       if (userResult.rows.length === 0) {
         // No user found with that username
@@ -78,32 +86,40 @@ router.post('/login', async (req, res, next) => {
         });
       }
       
-      // Password is valid, create session
       // Check if sessions table exists and create it if it doesn't
-      const sessionsTableCheck = await db.query(`
-        SELECT EXISTS (
-          SELECT FROM information_schema.tables 
-          WHERE table_schema = 'public' 
-          AND table_name = 'user_sessions'
-        );
-      `);
+      let sessionTableExists = await checkTableExists('user_sessions');
       
-      if (!sessionsTableCheck.rows[0].exists) {
-        // Create user_sessions table
-        await db.query(`
-          CREATE TABLE IF NOT EXISTS user_sessions (
-            id SERIAL PRIMARY KEY,
-            user_id INTEGER NOT NULL,
-            session_token VARCHAR(255) UNIQUE NOT NULL,
-            expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
-            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-            ip_address VARCHAR(45),
-            user_agent TEXT,
-            CONSTRAINT fk_user FOREIGN KEY (user_id) REFERENCES users(id)
-          );
-          
-          CREATE INDEX IF NOT EXISTS idx_user_sessions_token ON user_sessions(session_token);
-        `);
+      if (!sessionTableExists) {
+        // Create sessions table
+        try {
+          await db.query(`
+            CREATE TABLE user_sessions (
+              id SERIAL PRIMARY KEY,
+              user_id INTEGER NOT NULL,
+              session_token VARCHAR(255) UNIQUE NOT NULL,
+              expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
+              created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+              ip_address VARCHAR(45),
+              user_agent TEXT,
+              CONSTRAINT fk_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
+            );
+            
+            CREATE INDEX idx_user_sessions_token ON user_sessions(session_token);
+          `);
+          console.log('Created user_sessions table');
+          sessionTableExists = true;
+        } catch (error) {
+          console.error('Error creating user_sessions table:', error);
+          // Respond with success but without session token if we can't create the sessions table
+          return res.status(200).json({
+            message: 'Login successful (without session)',
+            user: {
+              id: user.id,
+              username: user.username,
+              email: user.email
+            }
+          });
+        }
       }
       
       // Generate session token
@@ -123,18 +139,22 @@ router.post('/login', async (req, res, next) => {
         [user.id, sessionToken, expiresAt, ipAddress, userAgent]
       );
       
-      // Update user's last_login timestamp
-      await db.query(
-        'UPDATE users SET last_login = NOW() WHERE id = $1',
-        [user.id]
-      );
+      // Update user's last_login timestamp if the column exists
+      if (userColumns.includes('last_login')) {
+        await db.query(
+          'UPDATE users SET last_login = NOW() WHERE id = $1',
+          [user.id]
+        );
+      }
       
       // Return success with session token
       res.status(200).json({
         message: 'Login successful',
         user: {
           id: user.id,
-          username: user.username
+          username: user.username,
+          email: user.email,
+          phone: user.phone
         },
         session: {
           token: sessionToken,
@@ -177,27 +197,34 @@ router.post('/logout', async (req, res, next) => {
       });
     }
     
+    // Check if sessions table exists
+    const sessionTableExists = await checkTableExists('user_sessions');
+    
+    if (!sessionTableExists) {
+      // No sessions table, can't logout but not an error
+      return res.status(200).json({
+        message: 'Logout successful'
+      });
+    }
+    
     // Delete session
     const result = await db.query(
       'DELETE FROM user_sessions WHERE session_token = $1 RETURNING id',
       [sessionToken]
     );
     
-    if (result.rows.length === 0) {
-      // Session not found
-      return res.status(404).json({
-        error: 'Not Found',
-        message: 'Session not found'
-      });
-    }
-    
-    // Return success
+    // Return success regardless of whether session was found
+    // This is a security best practice
     res.status(200).json({
       message: 'Logout successful'
     });
     
   } catch (error) {
-    next(error);
+    console.error('Logout error:', error);
+    // Always return success for logout attempts
+    res.status(200).json({
+      message: 'Logout successful'
+    });
   }
 });
 
@@ -213,14 +240,40 @@ router.post('/verify-session', async (req, res, next) => {
       });
     }
     
+    // Check if sessions table exists
+    const sessionTableExists = await checkTableExists('user_sessions');
+    
+    if (!sessionTableExists) {
+      return res.status(401).json({
+        error: 'Unauthorized',
+        message: 'Invalid or expired session'
+      });
+    }
+    
+    // Get columns in users table
+    const userColumns = await getTableColumns('users');
+    
+    // Build the join query based on available columns
+    let joinQuery = `
+      SELECT s.id, s.user_id, s.expires_at, u.username
+    `;
+    
+    // Add optional columns if they exist
+    if (userColumns.includes('email')) {
+      joinQuery += ', u.email';
+    }
+    if (userColumns.includes('phone')) {
+      joinQuery += ', u.phone';
+    }
+    
+    joinQuery += `
+      FROM user_sessions s 
+      JOIN users u ON s.user_id = u.id 
+      WHERE s.session_token = $1 AND s.expires_at > NOW()
+    `;
+    
     // Get session from database
-    const sessionResult = await db.query(
-      `SELECT s.id, s.user_id, s.expires_at, u.username 
-       FROM user_sessions s 
-       JOIN users u ON s.user_id = u.id 
-       WHERE s.session_token = $1 AND s.expires_at > NOW()`,
-      [sessionToken]
-    );
+    const sessionResult = await db.query(joinQuery, [sessionToken]);
     
     if (sessionResult.rows.length === 0) {
       // Session not found or expired
@@ -237,7 +290,9 @@ router.post('/verify-session', async (req, res, next) => {
       message: 'Session valid',
       user: {
         id: session.user_id,
-        username: session.username
+        username: session.username,
+        email: session.email,
+        phone: session.phone
       },
       session: {
         id: session.id,
@@ -246,9 +301,45 @@ router.post('/verify-session', async (req, res, next) => {
     });
     
   } catch (error) {
-    next(error);
+    console.error('Session verification error:', error);
+    return res.status(401).json({
+      error: 'Unauthorized',
+      message: 'Session verification failed'
+    });
   }
 });
+
+/**
+ * Check if a table exists in the database
+ * @param {string} tableName - Name of the table to check
+ * @returns {Promise<boolean>} - True if table exists
+ */
+const checkTableExists = async (tableName) => {
+  const result = await db.query(`
+    SELECT EXISTS (
+      SELECT FROM information_schema.tables 
+      WHERE table_schema = 'public' 
+      AND table_name = $1
+    );
+  `, [tableName]);
+  
+  return result.rows[0].exists;
+};
+
+/**
+ * Get the column names for a table
+ * @param {string} tableName - Name of the table
+ * @returns {Promise<string[]>} - Array of column names
+ */
+const getTableColumns = async (tableName) => {
+  const result = await db.query(`
+    SELECT column_name
+    FROM information_schema.columns
+    WHERE table_schema = 'public' AND table_name = $1;
+  `, [tableName]);
+  
+  return result.rows.map(row => row.column_name);
+};
 
 // Add a status endpoint to check auth service health
 router.get('/status', (req, res) => {
