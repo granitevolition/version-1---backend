@@ -67,7 +67,7 @@ const API_PREFIX = '/api/v1';
 app.get('/health', (req, res) => {
   const healthy = db.hasConnection;
   const status = healthy ? 'healthy' : 'degraded';
-  const statusCode = healthy ? 200 : 200; // Always return 200 for health checks
+  const statusCode = 200; // Always return 200 for health checks
 
   res.status(statusCode).json({
     status: status,
@@ -76,7 +76,12 @@ app.get('/health', (req, res) => {
     services: {
       database: {
         status: db.hasConnection ? 'connected' : 'disconnected',
-        message: db.hasConnection ? 'PostgreSQL connected' : 'PostgreSQL connection failed'
+        message: db.hasConnection ? 'PostgreSQL connected' : 'PostgreSQL connection failed',
+        env: {
+          DATABASE_URL_EXISTS: !!process.env.DATABASE_URL,
+          DATABASE_PUBLIC_URL_EXISTS: !!process.env.DATABASE_PUBLIC_URL,
+          POSTGRES_URL_EXISTS: !!process.env.POSTGRES_URL
+        }
       }
     }
   });
@@ -97,17 +102,13 @@ app.get('/debug-cors', (req, res) => {
   });
 });
 
-// Register routes
-app.use(`${API_PREFIX}/users`, usersRoutes);
-app.use(`${API_PREFIX}/auth`, authRoutes);
-app.use(`${API_PREFIX}/humanize`, humanizeRoutes);
-
 // Root route
 app.get('/', (req, res) => {
   res.json({
     message: 'Welcome to the API',
     status: 'online',
     timestamp: new Date().toISOString(),
+    database_connected: db.hasConnection,
     endpoints: {
       users: `${API_PREFIX}/users`,
       auth: `${API_PREFIX}/auth`,
@@ -123,6 +124,7 @@ app.get(API_PREFIX, (req, res) => {
     message: 'API v1',
     status: 'online',
     timestamp: new Date().toISOString(),
+    database_connected: db.hasConnection,
     endpoints: {
       users: `${API_PREFIX}/users`,
       auth: `${API_PREFIX}/auth`,
@@ -131,6 +133,23 @@ app.get(API_PREFIX, (req, res) => {
     }
   });
 });
+
+// Register routes - with database connection check middleware
+const dbCheckMiddleware = (req, res, next) => {
+  if (!db.hasConnection) {
+    return res.status(503).json({
+      error: 'Service Unavailable',
+      message: 'Database connection is not available. Please try again later.',
+      timestamp: new Date().toISOString()
+    });
+  }
+  next();
+};
+
+// Register routes with DB check middleware
+app.use(`${API_PREFIX}/users`, dbCheckMiddleware, usersRoutes);
+app.use(`${API_PREFIX}/auth`, authRoutes); // Auth routes handle DB connection checks internally
+app.use(`${API_PREFIX}/humanize`, humanizeRoutes);
 
 // 404 handler
 app.use((req, res, next) => {
@@ -161,48 +180,79 @@ app.use((err, req, res, next) => {
 
 // Initialize database and start server
 async function startServer() {
+  let serverStarted = false;
+  const startTime = new Date().toISOString();
+  
+  // Start the server regardless of database connection
+  const server = app.listen(PORT, () => {
+    serverStarted = true;
+    console.log(`Server started in provisional mode on port ${PORT} at: ${startTime}`);
+    console.log(`Health check: /health`);
+    console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
+  });
+  
+  // Try to connect to the database
   try {
-    // Initialize database connection
-    await db.connect();
-    console.log('Database connected successfully at:', new Date().toISOString());
+    console.log('Attempting database connection...');
+    
+    // Attempt database connection with retry logic
+    let connected = false;
+    let attempts = 0;
+    const maxAttempts = 5;
+    
+    while (!connected && attempts < maxAttempts) {
+      attempts++;
+      try {
+        connected = await db.connect();
+        if (connected) {
+          console.log(`Database connected successfully after ${attempts} attempt(s) at:`, new Date().toISOString());
+          break;
+        }
+      } catch (connectionError) {
+        console.error(`Database connection attempt ${attempts} failed:`, connectionError);
+        if (attempts < maxAttempts) {
+          console.log(`Waiting 3 seconds before retry...`);
+          await new Promise(resolve => setTimeout(resolve, 3000));
+        }
+      }
+    }
+    
+    if (!connected) {
+      console.error(`Failed to connect to database after ${maxAttempts} attempts`);
+      // Continue in limited mode
+      return;
+    }
     
     // Initialize database tables
     try {
+      console.log('Creating database tables if needed...');
       await initializeTables();
       console.log('Database tables initialized at:', new Date().toISOString());
       
       // Initialize humanize tables
+      console.log('Creating humanize tracking tables...');
       await createHumanizeTables();
-      console.log('Humanize tables initialized at:', new Date().toISOString());
+      console.log('Humanize tables initialized');
+      
+      // If we got here, the database is fully initialized
+      if (serverStarted) {
+        console.log(`Server now fully operational with database at: ${new Date().toISOString()}`);
+        console.log(`API endpoint: ${API_PREFIX}`);
+      }
     } catch (migrationError) {
       console.error('Error during database initialization:', migrationError);
-      // Continue starting the server despite migration errors
+      // Continue with server running but migrations might have failed
     }
-    
-    // Start the server
-    app.listen(PORT, () => {
-      console.log(`Server running on port ${PORT} at:`, new Date().toISOString());
-      console.log(`API endpoint: ${API_PREFIX}`);
-      console.log(`Health check: /health`);
-      console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
-    });
   } catch (error) {
-    console.error('Failed to start server:', error);
-    
-    // Try to start server anyway to serve at least health check endpoint
-    try {
-      app.listen(PORT, () => {
-        console.log(`Server running in LIMITED MODE on port ${PORT} at:`, new Date().toISOString());
-        console.log('Only health check and basic endpoints available!');
-      });
-    } catch (fallbackError) {
-      console.error('Fatal error, could not start server:', fallbackError);
-      process.exit(1);
-    }
+    console.error('Error during startup:', error);
+    // Server is already running in limited mode
   }
 }
 
-startServer();
+// Run the startup procedure
+startServer().catch(error => {
+  console.error('Fatal error during startup:', error);
+});
 
 // Handle graceful shutdown
 process.on('SIGTERM', () => {
