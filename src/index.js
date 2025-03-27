@@ -15,9 +15,47 @@ const humanizeRoutes = require('./routes/humanize');
 const app = express();
 const PORT = process.env.PORT || 5000;
 
+// Advanced CORS configuration
+const corsOptions = {
+  origin: function (origin, callback) {
+    // Allow any origin in development, or specific origins in production
+    const allowedOrigins = [
+      // Frontend origins
+      'https://version-1-frontend-production.up.railway.app',
+      'https://version-1---frontend-production.up.railway.app',
+      // Allow localhost for development
+      'http://localhost:3000',
+      'http://localhost:5000',
+      // Allow null origin (for local file requests, etc.)
+      undefined,
+      'null'
+    ];
+    
+    // In development allow all origins
+    if (process.env.NODE_ENV === 'development' || !origin) {
+      return callback(null, true);
+    }
+    
+    // In production, check against allowed list
+    if (allowedOrigins.indexOf(origin) !== -1 || !origin) {
+      callback(null, true);
+    } else {
+      console.log('CORS blocked request from:', origin);
+      callback(new Error('Not allowed by CORS'));
+    }
+  },
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With'],
+  credentials: true,
+  maxAge: 86400 // 24 hours
+};
+
 // Middleware
-app.use(helmet()); // Security headers
-app.use(cors()); // Enable CORS for all routes
+app.use(cors(corsOptions)); // Apply CORS with options
+app.use(helmet({
+  // Allow cross-origin for Railway and other platforms
+  crossOriginResourcePolicy: { policy: 'cross-origin' }
+})); 
 app.use(morgan('dev')); // Logging
 app.use(express.json()); // JSON body parser
 
@@ -45,7 +83,19 @@ app.get('/health', (req, res) => {
 });
 
 // Pre-flight options for CORS
-app.options('*', cors());
+app.options('*', cors(corsOptions));
+
+// Debug endpoint to check request headers
+app.get('/debug-cors', (req, res) => {
+  res.json({
+    headers: req.headers,
+    origin: req.headers.origin,
+    host: req.headers.host,
+    method: req.method,
+    ip: req.ip,
+    timestamp: new Date().toISOString()
+  });
+});
 
 // Register routes
 app.use(`${API_PREFIX}/users`, usersRoutes);
@@ -93,6 +143,16 @@ app.use((req, res, next) => {
 // Error handler middleware
 app.use((err, req, res, next) => {
   console.error('Unhandled error:', err);
+  
+  // Handle CORS errors specially
+  if (err.message === 'Not allowed by CORS') {
+    return res.status(403).json({
+      error: 'Forbidden',
+      message: 'CORS policy violation: origin not allowed',
+      details: 'The origin of this request is not allowed to access this resource'
+    });
+  }
+  
   res.status(500).json({
     error: 'Server Error',
     message: err.message || 'An unexpected error occurred'
@@ -122,6 +182,9 @@ async function startServer() {
     // Start the server
     app.listen(PORT, () => {
       console.log(`Server running on port ${PORT} at:`, new Date().toISOString());
+      console.log(`API endpoint: ${API_PREFIX}`);
+      console.log(`Health check: /health`);
+      console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
     });
   } catch (error) {
     console.error('Failed to start server:', error);
