@@ -25,6 +25,7 @@ if (!connectionString) {
 
 // Import routes
 const userRoutes = require('./routes/users');
+const adminRoutes = require('./routes/admin');
 
 // Initialize express app
 const app = express();
@@ -38,6 +39,7 @@ app.use(express.json()); // Parse JSON request bodies
 
 // Routes
 app.use('/api/users', userRoutes);
+app.use('/api/admin', adminRoutes);
 
 // Health check endpoint
 app.get('/health', (req, res) => {
@@ -65,6 +67,53 @@ app.get('/api/status/database', (req, res) => {
     }
   });
 });
+
+// Auto-initialize database on startup
+const db = require('./db');
+if (db.hasConnection) {
+  const adminRoute = require('./routes/admin');
+  const initializeDb = async () => {
+    try {
+      console.log('Attempting to initialize database on startup...');
+      
+      // Schema for users table
+      const schema = `
+        CREATE TABLE IF NOT EXISTS users (
+          id SERIAL PRIMARY KEY,
+          username VARCHAR(50) UNIQUE NOT NULL,
+          password_hash VARCHAR(255) NOT NULL,
+          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+          updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+        );
+
+        CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+      `;
+
+      // Execute the schema
+      await db.query(schema);
+      
+      // Check if the users table was successfully created
+      const tableCheck = await db.query(`
+        SELECT EXISTS (
+          SELECT FROM information_schema.tables 
+          WHERE table_schema = 'public' 
+          AND table_name = 'users'
+        );
+      `);
+      
+      if (tableCheck.rows[0].exists) {
+        console.log('Database initialized successfully - users table exists');
+      } else {
+        console.error('Failed to create users table during initialization');
+      }
+    } catch (error) {
+      console.error('Error during database initialization:', error.message);
+    }
+  };
+  
+  // Run initialization
+  initializeDb().catch(console.error);
+}
 
 // Error handling middleware
 app.use((err, req, res, next) => {
