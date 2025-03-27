@@ -6,6 +6,7 @@ const router = express.Router();
 
 // Register a new user
 router.post('/register', async (req, res, next) => {
+  console.log('Registration request received:', req.body);
   try {
     // Check if database connection is available
     if (!db.hasConnection) {
@@ -17,9 +18,11 @@ router.post('/register', async (req, res, next) => {
     }
 
     const { username, password } = req.body;
+    console.log('Processing registration for username:', username);
     
     // Validate input
     if (!username || !password) {
+      console.log('Validation failed: missing username or password');
       return res.status(400).json({ 
         error: 'Bad Request',
         message: 'Username and password are required' 
@@ -36,8 +39,10 @@ router.post('/register', async (req, res, next) => {
         );
       `);
       
+      console.log('Table check result:', tableCheck.rows[0]);
+      
       if (!tableCheck.rows[0].exists) {
-        console.error('Users table does not exist - attempting to create it');
+        console.log('Users table does not exist - attempting to create it');
         
         // Create the users table
         await db.query(`
@@ -61,7 +66,10 @@ router.post('/register', async (req, res, next) => {
         [username]
       );
       
+      console.log('Existing user check result:', { count: existingUser.rows.length });
+      
       if (existingUser.rows.length > 0) {
+        console.log('Username already exists');
         return res.status(409).json({ 
           error: 'Conflict',
           message: 'Username already exists' 
@@ -72,29 +80,42 @@ router.post('/register', async (req, res, next) => {
       const salt = await bcrypt.genSalt(10);
       const passwordHash = await bcrypt.hash(password, salt);
       
+      console.log('Password hashed successfully');
+      
       // Insert the new user
-      const result = await db.query(
-        'INSERT INTO users (username, password_hash) VALUES ($1, $2) RETURNING id, username, created_at',
-        [username, passwordHash]
-      );
+      console.log('Attempting to insert user into database...');
+      const insertQuery = 'INSERT INTO users (username, password_hash) VALUES ($1, $2) RETURNING id, username, created_at';
+      const insertValues = [username, passwordHash];
+      console.log('Insert query:', insertQuery);
+      console.log('Insert values:', [username, '***REDACTED***']);
+      
+      const result = await db.query(insertQuery, insertValues);
+      
+      console.log('Insert query result:', result);
+      console.log('Insert rows:', result.rows);
       
       // Check if insertion was successful
       if (!result.rows || result.rows.length === 0) {
+        console.error('Failed to insert user: no rows returned from insert query');
         throw new Error('Failed to insert user into database');
       }
       
+      const newUser = result.rows[0];
+      console.log('New user created:', newUser);
+      
       // Return the newly created user
-      res.status(201).json(result.rows[0]);
+      res.status(201).json(newUser);
       
     } catch (dbError) {
       console.error('Database operation failed:', dbError.message);
+      console.error(dbError.stack);
       
       // Check if the error is related to missing tables
       if (dbError.message.includes('relation "users" does not exist')) {
         return res.status(500).json({
           error: 'Database Setup Error',
           message: 'The users table does not exist in the database.',
-          details: 'Database is connected but schema has not been initialized. Run the schema.sql script.'
+          details: 'Database is connected but schema has not been initialized.'
         });
       }
       
@@ -102,6 +123,8 @@ router.post('/register', async (req, res, next) => {
     }
     
   } catch (error) {
+    console.error('Registration error:', error.message);
+    console.error(error.stack);
     next(error);
   }
 });
