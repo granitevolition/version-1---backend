@@ -8,31 +8,60 @@ const connectionString = process.env.DATABASE_URL ||
                          process.env.DATABASE_PUBLIC_URL || 
                          process.env.POSTGRES_URL;
 
-if (!connectionString) {
-  console.error('No database connection string found. Please set DATABASE_URL, DATABASE_PUBLIC_URL, or POSTGRES_URL');
-  process.exit(1);
+// Dummy pool for when we're running without a database
+const dummyPool = {
+  query: () => Promise.reject(new Error('No database connection available')),
+  connect: () => Promise.reject(new Error('No database connection available'))
+};
+
+let pool;
+
+// Only create a real pool if we have a connection string
+if (connectionString) {
+  try {
+    pool = new Pool({
+      connectionString,
+      ssl: {
+        rejectUnauthorized: false // Required for Railway Postgres
+      }
+    });
+
+    // Test the database connection
+    pool.query('SELECT NOW()', (err, res) => {
+      if (err) {
+        console.error('Database connection error:', err.message);
+      } else {
+        console.log('Database connected successfully at:', res.rows[0].now);
+      }
+    });
+  } catch (err) {
+    console.error('Failed to create database pool:', err.message);
+    pool = dummyPool;
+  }
+} else {
+  console.error('No database connection string found. Using dummy database implementation.');
+  pool = dummyPool;
 }
 
-const pool = new Pool({
-  connectionString,
-  ssl: {
-    rejectUnauthorized: false // Required for Railway Postgres
+// Wrapper with error handling
+const safeQuery = async (text, params) => {
+  try {
+    return await pool.query(text, params);
+  } catch (err) {
+    console.error('Database query error:', err.message);
+    console.error('Query:', text);
+    console.error('Params:', params);
+    throw err;
   }
-});
-
-// Test the database connection
-pool.query('SELECT NOW()', (err, res) => {
-  if (err) {
-    console.error('Database connection error:', err.message);
-  } else {
-    console.log('Database connected successfully at:', res.rows[0].now);
-  }
-});
+};
 
 module.exports = {
-  // Execute a query on the database
-  query: (text, params) => pool.query(text, params),
+  // Execute a query on the database with better error handling
+  query: safeQuery,
   
   // Get a client from the pool
-  getClient: () => pool.connect()
+  getClient: () => pool.connect(),
+  
+  // Check if we have a real database connection
+  hasConnection: !!connectionString
 };
