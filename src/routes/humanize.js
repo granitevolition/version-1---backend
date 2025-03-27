@@ -38,6 +38,8 @@ router.post('/humanize-text', async (req, res) => {
         message: 'Please provide text to humanize'
       });
     }
+
+    console.log(`Humanizing text (${text.length} chars). Calling API at: ${HUMANIZER_API_URL}/humanize_text`);
     
     // Get user if authenticated
     let userId = null;
@@ -119,79 +121,129 @@ router.post('/humanize-text', async (req, res) => {
     }
     
     // Forward request to the real humanizer API
-    const response = await axios.post(`${HUMANIZER_API_URL}/humanize_text`, {
-      input_text: text
-    });
+    // Make sure we're using the correct endpoint: /humanize_text
+    const apiUrl = `${HUMANIZER_API_URL}/humanize_text`;
+    console.log(`Sending request to: ${apiUrl}`);
     
-    // Extract the result from the response
-    const humanizedText = response.data.result || response.data.humanized_text || response.data.text;
-    
-    if (!humanizedText) {
-      throw new Error('Humanizer API returned an invalid response');
-    }
-    
-    // Calculate processing time
-    const processTime = Date.now() - startTime;
-    
-    // Log the humanization in the database
     try {
-      const ipAddress = req.ip || req.socket.remoteAddress;
-      const userAgent = req.headers['user-agent'];
+      const response = await axios.post(apiUrl, {
+        input_text: text
+      }, {
+        headers: {
+          'Content-Type': 'application/json'
+        },
+        timeout: 30000 // 30 second timeout
+      });
       
-      // Parse AI score if provided
-      let aiScoreValue = null;
-      let humanScoreValue = null;
+      console.log('Humanizer API response:', response.status, response.statusText);
+      console.log('Response data:', JSON.stringify(response.data).substring(0, 200) + '...');
       
-      if (aiScore) {
-        aiScoreValue = parseInt(aiScore.ai_score) || null;
-        humanScoreValue = parseInt(aiScore.human_score) || null;
+      // Extract the result from the response
+      const humanizedText = response.data.result || response.data.humanized_text || response.data.text;
+      
+      if (!humanizedText) {
+        throw new Error('Humanizer API returned an invalid response: ' + JSON.stringify(response.data));
       }
       
-      // Insert log entry
-      await db.query(
-        'INSERT INTO humanize_logs ' +
-        '(user_id, original_text, humanized_text, text_length, ai_score, human_score, ip_address, user_agent, process_time_ms) ' +
-        'VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)',
-        [
-          userId, 
-          text, 
-          humanizedText, 
-          text.length, 
-          aiScoreValue, 
-          humanScoreValue, 
-          ipAddress, 
-          userAgent, 
-          processTime
-        ]
-      );
+      // Calculate processing time
+      const processTime = Date.now() - startTime;
       
-      // Update usage statistics if user is logged in
-      if (userId) {
+      // Log the humanization in the database
+      try {
+        const ipAddress = req.ip || req.socket.remoteAddress;
+        const userAgent = req.headers['user-agent'];
+        
+        // Parse AI score if provided
+        let aiScoreValue = null;
+        let humanScoreValue = null;
+        
+        if (aiScore) {
+          aiScoreValue = parseInt(aiScore.ai_score) || null;
+          humanScoreValue = parseInt(aiScore.human_score) || null;
+        }
+        
+        // Insert log entry
         await db.query(
-          'UPDATE humanize_usage_statistics ' +
-          'SET total_uses = total_uses + 1, ' +
-          'total_characters = total_characters + $1, ' +
-          'avg_ai_score = CASE WHEN $2 IS NULL THEN avg_ai_score ELSE (avg_ai_score * total_uses + $2) / (total_uses + 1) END, ' +
-          'last_used_at = NOW(), ' +
-          'updated_at = NOW() ' +
-          'WHERE user_id = $3',
-          [text.length, aiScoreValue, userId]
+          'INSERT INTO humanize_logs ' +
+          '(user_id, original_text, humanized_text, text_length, ai_score, human_score, ip_address, user_agent, process_time_ms) ' +
+          'VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)',
+          [
+            userId, 
+            text, 
+            humanizedText, 
+            text.length, 
+            aiScoreValue, 
+            humanScoreValue, 
+            ipAddress, 
+            userAgent, 
+            processTime
+          ]
         );
+        
+        // Update usage statistics if user is logged in
+        if (userId) {
+          await db.query(
+            'UPDATE humanize_usage_statistics ' +
+            'SET total_uses = total_uses + 1, ' +
+            'total_characters = total_characters + $1, ' +
+            'avg_ai_score = CASE WHEN $2 IS NULL THEN avg_ai_score ELSE (avg_ai_score * total_uses + $2) / (total_uses + 1) END, ' +
+            'last_used_at = NOW(), ' +
+            'updated_at = NOW() ' +
+            'WHERE user_id = $3',
+            [text.length, aiScoreValue, userId]
+          );
+        }
+      } catch (logError) {
+        console.error('Error logging humanization:', logError);
+        // Continue despite logging error
       }
-    } catch (logError) {
-      console.error('Error logging humanization:', logError);
-      // Continue despite logging error
+      
+      // Return the humanized text to the client
+      res.json({
+        original: text,
+        humanized: humanizedText,
+        stats: {
+          characters: text.length,
+          processing_time_ms: processTime
+        }
+      });
+      
+    } catch (apiError) {
+      console.error('Error calling humanizer API:', apiError);
+      
+      // Check for specific error types and provide helpful messages
+      if (apiError.code === 'ECONNREFUSED' || apiError.code === 'ENOTFOUND') {
+        return res.status(503).json({
+          error: 'Service Unavailable',
+          message: 'The humanization service is currently unreachable. Please try again later.',
+          details: 'Connection to the humanizer API failed'
+        });
+      }
+      
+      if (apiError.code === 'ETIMEDOUT' || apiError.code === 'ESOCKETTIMEDOUT') {
+        return res.status(504).json({
+          error: 'Gateway Timeout',
+          message: 'The humanization service took too long to respond. Please try again with a shorter text.',
+          details: 'Request to the humanizer API timed out'
+        });
+      }
+      
+      // If we have a response from the API but it's an error
+      if (apiError.response) {
+        return res.status(apiError.response.status).json({
+          error: 'Humanization Failed',
+          message: 'The humanization service returned an error.',
+          details: apiError.response.data || apiError.message
+        });
+      }
+      
+      // Generic error fallback
+      return res.status(500).json({
+        error: 'Humanization Failed',
+        message: 'An error occurred during text humanization. Please try again later.',
+        details: apiError.message
+      });
     }
-    
-    // Return the humanized text to the client
-    res.json({
-      original: text,
-      humanized: humanizedText,
-      stats: {
-        characters: text.length,
-        processing_time_ms: processTime
-      }
-    });
     
   } catch (error) {
     console.error('Humanize error:', error);
@@ -352,6 +404,35 @@ router.get('/history', async (req, res) => {
       message: error.message || 'An unexpected error occurred'
     });
   }
+});
+
+// Simple health check for this service
+router.get('/health', (req, res) => {
+  // Test the humanizer API
+  axios.get(`${HUMANIZER_API_URL}/health`, { timeout: 5000 })
+    .then(response => {
+      res.json({
+        status: 'healthy',
+        database: db.hasConnection ? 'connected' : 'disconnected',
+        humanizer: {
+          status: 'available',
+          url: HUMANIZER_API_URL
+        },
+        timestamp: new Date().toISOString()
+      });
+    })
+    .catch(error => {
+      res.json({
+        status: 'degraded',
+        database: db.hasConnection ? 'connected' : 'disconnected',
+        humanizer: {
+          status: 'unavailable',
+          error: error.message,
+          url: HUMANIZER_API_URL
+        },
+        timestamp: new Date().toISOString()
+      });
+    });
 });
 
 module.exports = router;
