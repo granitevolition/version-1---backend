@@ -24,11 +24,27 @@ async function createHumanizeTables() {
       return;
     }
     
+    // Check if users table exists before trying to reference it
+    const usersExist = await db.query(`
+      SELECT EXISTS (
+        SELECT FROM information_schema.tables 
+        WHERE table_schema = 'public' 
+        AND table_name = 'users'
+      );
+    `);
+    
+    const usersTableExists = usersExist.rows[0].exists;
+    
+    // Define the user_id column based on whether users table exists
+    const userIdColumn = usersTableExists 
+      ? "user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,"
+      : "user_id INTEGER,";
+      
     // Create the humanize_logs table
     await db.query(`
       CREATE TABLE humanize_logs (
         id SERIAL PRIMARY KEY,
-        user_id INTEGER REFERENCES users(id) ON DELETE SET NULL,
+        ${userIdColumn}
         original_text TEXT NOT NULL,
         humanized_text TEXT NOT NULL,
         text_length INTEGER NOT NULL,
@@ -48,10 +64,15 @@ async function createHumanizeTables() {
     `);
     
     // Create the humanize_usage_statistics table for aggregated data
+    // If users table doesn't exist, create without foreign key constraint
+    const userStatsUserIdColumn = usersTableExists
+      ? "user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,"
+      : "user_id INTEGER,";
+      
     await db.query(`
       CREATE TABLE humanize_usage_statistics (
         id SERIAL PRIMARY KEY,
-        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        ${userStatsUserIdColumn}
         total_uses INTEGER DEFAULT 0,
         total_characters INTEGER DEFAULT 0,
         avg_ai_score NUMERIC(5,2) DEFAULT 0,
@@ -86,10 +107,60 @@ async function createHumanizeTables() {
     console.log('Humanize tables created successfully');
   } catch (error) {
     console.error('Error creating humanize tables:', error);
-    throw error;
+    // Don't throw the error to allow the server to continue starting
+  }
+}
+
+/**
+ * Fix foreign key constraints on humanize tables if they were created before the users table
+ */
+async function fixHumanizeTableConstraints() {
+  try {
+    // Check if users and humanize tables exist
+    const [usersExist, humanizeLogsExist, humanizeStatsExist] = await Promise.all([
+      db.query(`SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'users');`),
+      db.query(`SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'humanize_logs');`),
+      db.query(`SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'humanize_usage_statistics');`)
+    ]);
+    
+    // Only proceed if users table exists but the humanize tables might not have constraints
+    if (usersExist.rows[0].exists && (humanizeLogsExist.rows[0].exists || humanizeStatsExist.rows[0].exists)) {
+      // Check if foreign key constraints exist
+      const constraints = await db.query(`
+        SELECT tc.constraint_name, tc.table_name, kcu.column_name
+        FROM information_schema.table_constraints tc
+        JOIN information_schema.key_column_usage kcu ON tc.constraint_name = kcu.constraint_name
+        WHERE tc.constraint_type = 'FOREIGN KEY'
+        AND (tc.table_name = 'humanize_logs' OR tc.table_name = 'humanize_usage_statistics')
+        AND kcu.column_name = 'user_id';
+      `);
+      
+      // If constraints don't exist for humanize_logs, add them
+      if (humanizeLogsExist.rows[0].exists && !constraints.rows.some(r => r.table_name === 'humanize_logs')) {
+        console.log('Adding foreign key constraint to humanize_logs table');
+        await db.query(`
+          ALTER TABLE humanize_logs
+          ADD CONSTRAINT fk_humanize_logs_user_id
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE SET NULL;
+        `);
+      }
+      
+      // If constraints don't exist for humanize_usage_statistics, add them
+      if (humanizeStatsExist.rows[0].exists && !constraints.rows.some(r => r.table_name === 'humanize_usage_statistics')) {
+        console.log('Adding foreign key constraint to humanize_usage_statistics table');
+        await db.query(`
+          ALTER TABLE humanize_usage_statistics
+          ADD CONSTRAINT fk_humanize_usage_stats_user_id
+          FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE;
+        `);
+      }
+    }
+  } catch (error) {
+    console.error('Error fixing humanize table constraints:', error);
   }
 }
 
 module.exports = {
-  createHumanizeTables
+  createHumanizeTables,
+  fixHumanizeTableConstraints
 };
