@@ -102,101 +102,23 @@ app.get('/api/status/database', (req, res) => {
   });
 });
 
-// Auto-initialize database on startup
+// Initialize database with safe migrations
 const db = require('./db');
+const { runMigrations } = require('./utils/dbMigration');
+
 if (db.hasConnection) {
-  const initializeDb = async () => {
-    try {
-      console.log('Attempting to initialize database on startup...');
-      
-      // Enhanced schema for users table with email and phone
-      const schema = `
-        CREATE TABLE IF NOT EXISTS users (
-          id SERIAL PRIMARY KEY,
-          username VARCHAR(50) UNIQUE NOT NULL,
-          password_hash VARCHAR(255) NOT NULL,
-          email VARCHAR(255) UNIQUE,
-          phone VARCHAR(20),
-          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-          updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-          last_login TIMESTAMP WITH TIME ZONE
-        );
-
-        CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
-        CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
-        
-        -- Create user_sessions table for handling login sessions
-        CREATE TABLE IF NOT EXISTS user_sessions (
-          id SERIAL PRIMARY KEY,
-          user_id INTEGER NOT NULL,
-          session_token VARCHAR(255) UNIQUE NOT NULL,
-          expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
-          created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-          ip_address VARCHAR(45),
-          user_agent TEXT,
-          CONSTRAINT fk_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-        );
-        
-        CREATE INDEX IF NOT EXISTS idx_user_sessions_token ON user_sessions(session_token);
-      `;
-
-      // Execute the schema
-      await db.query(schema);
-      
-      // Check if the tables were successfully created
-      const tableCheck = await db.query(`
-        SELECT 
-          (SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'users')) as users_exists,
-          (SELECT EXISTS (SELECT FROM information_schema.tables WHERE table_schema = 'public' AND table_name = 'user_sessions')) as sessions_exists;
-      `);
-      
-      if (tableCheck.rows[0].users_exists && tableCheck.rows[0].sessions_exists) {
-        console.log('Database initialized successfully - all tables exist');
+  // Run database migrations
+  runMigrations()
+    .then(success => {
+      if (success) {
+        console.log('Database successfully initialized with migrations.');
       } else {
-        console.error('Failed to create some tables during initialization:', tableCheck.rows[0]);
+        console.error('Database migrations failed. Some features may not work properly.');
       }
-      
-      // Check for needed column migrations
-      const columnCheck = await db.query(`
-        SELECT column_name
-        FROM information_schema.columns
-        WHERE table_schema = 'public' AND table_name = 'users';
-      `);
-      
-      const columns = columnCheck.rows.map(row => row.column_name);
-      
-      // Add email column if it doesn't exist
-      if (!columns.includes('email')) {
-        console.log('Adding email column to users table...');
-        await db.query(`
-          ALTER TABLE users ADD COLUMN email VARCHAR(255) UNIQUE;
-          CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
-        `);
-      }
-      
-      // Add phone column if it doesn't exist
-      if (!columns.includes('phone')) {
-        console.log('Adding phone column to users table...');
-        await db.query(`
-          ALTER TABLE users ADD COLUMN phone VARCHAR(20);
-        `);
-      }
-      
-      // Add last_login column if it doesn't exist
-      if (!columns.includes('last_login')) {
-        console.log('Adding last_login column to users table...');
-        await db.query(`
-          ALTER TABLE users ADD COLUMN last_login TIMESTAMP WITH TIME ZONE;
-        `);
-      }
-      
-    } catch (error) {
+    })
+    .catch(error => {
       console.error('Error during database initialization:', error.message);
-    }
-  };
-  
-  // Run initialization
-  initializeDb().catch(console.error);
+    });
 }
 
 // Error handling middleware
