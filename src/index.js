@@ -26,20 +26,48 @@ if (!connectionString) {
 // Import routes
 const userRoutes = require('./routes/users');
 const adminRoutes = require('./routes/admin');
+const testRoutes = require('./routes/test');
 
 // Initialize express app
 const app = express();
 const PORT = process.env.PORT || 3000;
 
+// Configure CORS more explicitly
+const corsOptions = {
+  origin: '*', // Allow any origin for testing
+  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+  allowedHeaders: ['Origin', 'X-Requested-With', 'Content-Type', 'Accept', 'Authorization'],
+  credentials: true
+};
+
 // Middleware
 app.use(helmet()); // Security headers
-app.use(cors()); // Enable CORS for frontend
+app.use(cors(corsOptions)); // Enable CORS for frontend with specific options
 app.use(morgan('dev')); // Request logging
 app.use(express.json()); // Parse JSON request bodies
+
+// Debugging middleware to log all requests
+app.use((req, res, next) => {
+  console.log(`${new Date().toISOString()} - ${req.method} ${req.url}`);
+  console.log('Request headers:', req.headers);
+  if (req.body && Object.keys(req.body).length > 0) {
+    console.log('Request body:', req.body);
+  }
+  next();
+});
 
 // Routes
 app.use('/api/users', userRoutes);
 app.use('/api/admin', adminRoutes);
+app.use('/api/test', testRoutes);
+
+// Root endpoint for basic availability testing
+app.get('/', (req, res) => {
+  res.status(200).json({
+    message: 'API server is running',
+    time: new Date().toISOString()
+  });
+});
 
 // Health check endpoint
 app.get('/health', (req, res) => {
@@ -117,6 +145,7 @@ if (db.hasConnection) {
 
 // Error handling middleware
 app.use((err, req, res, next) => {
+  console.error('Error caught by global error handler:');
   console.error(err.stack);
   res.status(500).json({
     error: 'Server error',
