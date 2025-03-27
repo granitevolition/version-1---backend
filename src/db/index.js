@@ -6,17 +6,19 @@ let _hasConnection = false;
 
 // Initialize the database connection pool
 const createPool = () => {
-  // Get the database URL from the environment variable
-  const databaseUrl = process.env.DATABASE_URL || 
-                     process.env.DATABASE_PUBLIC_URL || 
+  // Get the database URL from the environment variable - prioritize PUBLIC_URL since it's more likely to work from containers
+  const databaseUrl = process.env.DATABASE_PUBLIC_URL || 
+                     process.env.DATABASE_URL || 
                      process.env.POSTGRES_URL;
   
   if (!databaseUrl) {
-    console.error('No database URL provided. Set DATABASE_URL, DATABASE_PUBLIC_URL, or POSTGRES_URL environment variable.');
+    console.error('No database URL provided. Set DATABASE_PUBLIC_URL, DATABASE_URL, or POSTGRES_URL environment variable.');
     return null;
   }
   
-  console.log('Connecting to database using:', databaseUrl.replace(/:([^:@]+)@/, ':****@'));
+  // Log the connection string (with password redacted)
+  const redactedUrl = databaseUrl.replace(/:([^:@]+)@/, ':****@');
+  console.log('Connecting to database using:', redactedUrl);
   
   try {
     return new Pool({
@@ -43,8 +45,9 @@ const testConnection = async () => {
   try {
     const client = await pool.connect();
     try {
-      await client.query('SELECT NOW()');
+      const result = await client.query('SELECT NOW()');
       _hasConnection = true;
+      console.log('Successfully connected to database at:', result.rows[0].now);
       return true;
     } finally {
       client.release();
@@ -75,19 +78,43 @@ const connect = async () => {
     } else {
       console.error('Database connection failed at:', new Date().toISOString());
       
-      // Try re-creating the pool
-      pool.end().catch(err => console.error('Error ending pool:', err));
-      pool = createPool();
-      
-      // Test connection again
-      const retrySuccess = await testConnection();
-      _hasConnection = retrySuccess;
-      
-      if (retrySuccess) {
-        console.log('Database connection successful after retry at:', new Date().toISOString());
-      } else {
-        console.error('Database connection failed after retry at:', new Date().toISOString());
+      // Try re-creating the pool with a different connection string priority
+      if (pool) {
+        try {
+          await pool.end();
+        } catch (err) {
+          console.error('Error ending pool:', err);
+        }
       }
+      
+      // If DATABASE_URL failed, try with DATABASE_PUBLIC_URL explicitly
+      if (process.env.DATABASE_PUBLIC_URL && process.env.DATABASE_URL !== process.env.DATABASE_PUBLIC_URL) {
+        console.log('Trying connection with DATABASE_PUBLIC_URL instead...');
+        const redactedUrl = process.env.DATABASE_PUBLIC_URL.replace(/:([^:@]+)@/, ':****@');
+        console.log('Connecting to:', redactedUrl);
+        
+        try {
+          pool = new Pool({
+            connectionString: process.env.DATABASE_PUBLIC_URL,
+            ssl: { rejectUnauthorized: false },
+            max: 20,
+            idleTimeoutMillis: 30000,
+            connectionTimeoutMillis: 5000,
+          });
+          
+          const retrySuccess = await testConnection();
+          _hasConnection = retrySuccess;
+          
+          if (retrySuccess) {
+            console.log('Database connection successful with DATABASE_PUBLIC_URL at:', new Date().toISOString());
+            return true;
+          }
+        } catch (publicUrlError) {
+          console.error('Error with DATABASE_PUBLIC_URL connection:', publicUrlError);
+        }
+      }
+      
+      console.error('Database connection failed after retry at:', new Date().toISOString());
     }
     
     return _hasConnection;
