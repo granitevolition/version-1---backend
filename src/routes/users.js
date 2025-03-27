@@ -4,6 +4,31 @@ const db = require('../db');
 
 const router = express.Router();
 
+// Username validation function
+const validateUsername = (username) => {
+  // Check length
+  if (!username || username.length < 3) {
+    return 'Username must be at least 3 characters long';
+  }
+  
+  // Check characters (letters, numbers, and underscores only)
+  if (!/^[a-zA-Z0-9_]+$/.test(username)) {
+    return 'Username can only contain letters, numbers, and underscores';
+  }
+  
+  return null;
+};
+
+// Password validation function
+const validatePassword = (password) => {
+  // Check length
+  if (!password || password.length < 6) {
+    return 'Password must be at least 6 characters long';
+  }
+  
+  return null;
+};
+
 // Register a new user
 router.post('/register', async (req, res, next) => {
   console.log('Registration request received:', req.body);
@@ -20,12 +45,21 @@ router.post('/register', async (req, res, next) => {
     const { username, password } = req.body;
     console.log('Processing registration for username:', username);
     
-    // Validate input
-    if (!username || !password) {
-      console.log('Validation failed: missing username or password');
+    // Validate username
+    const usernameError = validateUsername(username);
+    if (usernameError) {
       return res.status(400).json({ 
         error: 'Bad Request',
-        message: 'Username and password are required' 
+        message: usernameError
+      });
+    }
+    
+    // Validate password
+    const passwordError = validatePassword(password);
+    if (passwordError) {
+      return res.status(400).json({ 
+        error: 'Bad Request',
+        message: passwordError
       });
     }
     
@@ -72,7 +106,7 @@ router.post('/register', async (req, res, next) => {
         console.log('Username already exists');
         return res.status(409).json({ 
           error: 'Conflict',
-          message: 'Username already exists' 
+          message: 'Username already exists. Please choose another username.' 
         });
       }
       
@@ -104,11 +138,24 @@ router.post('/register', async (req, res, next) => {
       console.log('New user created:', newUser);
       
       // Return the newly created user
-      res.status(201).json(newUser);
+      res.status(201).json({
+        id: newUser.id,
+        username: newUser.username,
+        created_at: newUser.created_at,
+        message: 'User registered successfully'
+      });
       
     } catch (dbError) {
       console.error('Database operation failed:', dbError.message);
       console.error(dbError.stack);
+      
+      // Check if the error is a duplicate key violation (username already exists)
+      if (dbError.code === '23505') { // PostgreSQL unique violation code
+        return res.status(409).json({
+          error: 'Conflict',
+          message: 'Username already exists. Please choose another username.'
+        });
+      }
       
       // Check if the error is related to missing tables
       if (dbError.message.includes('relation "users" does not exist')) {
@@ -125,6 +172,75 @@ router.post('/register', async (req, res, next) => {
   } catch (error) {
     console.error('Registration error:', error.message);
     console.error(error.stack);
+    next(error);
+  }
+});
+
+// Get user by ID - useful for testing
+router.get('/:id', async (req, res, next) => {
+  try {
+    const { id } = req.params;
+    
+    // Check if database connection is available
+    if (!db.hasConnection) {
+      return res.status(503).json({
+        error: 'Service Unavailable',
+        message: 'Database connection is not available.'
+      });
+    }
+    
+    // Get user by ID
+    const result = await db.query(
+      'SELECT id, username, created_at FROM users WHERE id = $1',
+      [id]
+    );
+    
+    if (result.rows.length === 0) {
+      return res.status(404).json({
+        error: 'Not Found',
+        message: 'User not found'
+      });
+    }
+    
+    res.status(200).json(result.rows[0]);
+    
+  } catch (error) {
+    next(error);
+  }
+});
+
+// Check if username exists - useful for real-time validation
+router.post('/check-username', async (req, res, next) => {
+  try {
+    const { username } = req.body;
+    
+    // Validate input
+    if (!username) {
+      return res.status(400).json({ 
+        error: 'Bad Request',
+        message: 'Username is required' 
+      });
+    }
+    
+    // Check if database connection is available
+    if (!db.hasConnection) {
+      return res.status(503).json({
+        error: 'Service Unavailable',
+        message: 'Database connection is not available.'
+      });
+    }
+    
+    // Check if username exists
+    const result = await db.query(
+      'SELECT EXISTS(SELECT 1 FROM users WHERE username = $1)',
+      [username]
+    );
+    
+    res.status(200).json({
+      exists: result.rows[0].exists
+    });
+    
+  } catch (error) {
     next(error);
   }
 });
