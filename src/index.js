@@ -4,7 +4,7 @@ const morgan = require('morgan');
 const helmet = require('helmet');
 const db = require('./db');
 const { initializeTables } = require('./db/migration');
-const { createHumanizeTables } = require('./db/migrations/humanize_tables');
+const { createHumanizeTables, fixHumanizeTableConstraints } = require('./db/migrations/humanize_tables');
 
 // Import routes
 const usersRoutes = require('./routes/users');
@@ -232,6 +232,11 @@ async function startServer() {
       // Initialize humanize tables
       console.log('Creating humanize tracking tables...');
       await createHumanizeTables();
+      
+      // Fix any foreign key constraints that might be missing
+      console.log('Checking and fixing table relationships...');
+      await fixHumanizeTableConstraints();
+      
       console.log('Humanize tables initialized');
       
       // If we got here, the database is fully initialized
