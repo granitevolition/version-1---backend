@@ -27,6 +27,34 @@ router.post('/register', async (req, res, next) => {
     }
     
     try {
+      // First check if the users table exists
+      const tableCheck = await db.query(`
+        SELECT EXISTS (
+          SELECT FROM information_schema.tables 
+          WHERE table_schema = 'public' 
+          AND table_name = 'users'
+        );
+      `);
+      
+      if (!tableCheck.rows[0].exists) {
+        console.error('Users table does not exist - attempting to create it');
+        
+        // Create the users table
+        await db.query(`
+          CREATE TABLE IF NOT EXISTS users (
+            id SERIAL PRIMARY KEY,
+            username VARCHAR(50) UNIQUE NOT NULL,
+            password_hash VARCHAR(255) NOT NULL,
+            created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
+            updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP
+          );
+          
+          CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
+        `);
+        
+        console.log('Users table created successfully');
+      }
+      
       // Check if username already exists
       const existingUser = await db.query(
         'SELECT * FROM users WHERE username = $1',
@@ -50,8 +78,14 @@ router.post('/register', async (req, res, next) => {
         [username, passwordHash]
       );
       
+      // Check if insertion was successful
+      if (!result.rows || result.rows.length === 0) {
+        throw new Error('Failed to insert user into database');
+      }
+      
       // Return the newly created user
       res.status(201).json(result.rows[0]);
+      
     } catch (dbError) {
       console.error('Database operation failed:', dbError.message);
       
