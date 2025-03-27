@@ -1,8 +1,8 @@
 const { Pool } = require('pg');
 require('dotenv').config();
 
-let pool;
-let hasConnection = false;
+let pool = null;
+let _hasConnection = false;
 
 // Initialize the database connection pool
 const createPool = () => {
@@ -21,7 +21,10 @@ const createPool = () => {
   try {
     return new Pool({
       connectionString: databaseUrl,
-      ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false
+      ssl: process.env.NODE_ENV === 'production' ? { rejectUnauthorized: false } : false,
+      max: 20, // maximum number of clients the pool should contain
+      idleTimeoutMillis: 30000, // how long a client is allowed to remain idle before being closed
+      connectionTimeoutMillis: 5000, // how long to wait before timing out when connecting a new client
     });
   } catch (error) {
     console.error('Error creating database pool:', error);
@@ -29,14 +32,11 @@ const createPool = () => {
   }
 };
 
-// Initialize the pool
-pool = createPool();
-
 // Check if connection works
 const testConnection = async () => {
   if (!pool) {
     console.error('Database pool not initialized');
-    hasConnection = false;
+    _hasConnection = false;
     return false;
   }
   
@@ -44,14 +44,14 @@ const testConnection = async () => {
     const client = await pool.connect();
     try {
       await client.query('SELECT NOW()');
-      hasConnection = true;
+      _hasConnection = true;
       return true;
     } finally {
       client.release();
     }
   } catch (error) {
     console.error('Database connection test failed:', error);
-    hasConnection = false;
+    _hasConnection = false;
     return false;
   }
 };
@@ -61,38 +61,59 @@ const connect = async () => {
   try {
     if (!pool) {
       pool = createPool();
+      if (!pool) {
+        _hasConnection = false;
+        return false;
+      }
     }
     
     const success = await testConnection();
-    hasConnection = success;
+    _hasConnection = success;
     
     if (success) {
       console.log('Database connected successfully at:', new Date().toISOString());
     } else {
       console.error('Database connection failed at:', new Date().toISOString());
+      
+      // Try re-creating the pool
+      pool.end().catch(err => console.error('Error ending pool:', err));
+      pool = createPool();
+      
+      // Test connection again
+      const retrySuccess = await testConnection();
+      _hasConnection = retrySuccess;
+      
+      if (retrySuccess) {
+        console.log('Database connection successful after retry at:', new Date().toISOString());
+      } else {
+        console.error('Database connection failed after retry at:', new Date().toISOString());
+      }
     }
     
-    return success;
+    return _hasConnection;
   } catch (error) {
     console.error('Database connection error:', error);
-    hasConnection = false;
+    _hasConnection = false;
     return false;
   }
 };
 
-// Run the connection test immediately
-testConnection()
-  .then(success => {
-    console.log('Initial database connection test:', success ? 'SUCCESS' : 'FAILED');
-  })
-  .catch(error => {
-    console.error('Error during initial database connection test:', error);
-  });
-
 // Execute a query
 const query = async (text, params) => {
   if (!pool) {
-    throw new Error('Database pool not initialized');
+    pool = createPool();
+    if (!pool) {
+      throw new Error('Database pool not initialized and could not be created');
+    }
+    await testConnection();
+  }
+  
+  // Check connection state
+  if (!_hasConnection) {
+    const reconnected = await testConnection();
+    if (!reconnected) {
+      throw new Error('Database connection is not available');
+    }
   }
   
   const start = Date.now();
@@ -123,15 +144,38 @@ const disconnect = async () => {
     await pool.end();
     console.log('Database disconnected at:', new Date().toISOString());
     pool = null;
-    hasConnection = false;
+    _hasConnection = false;
     return true;
   }
   return false;
 };
 
+// Run the connection test immediately
+testConnection()
+  .then(success => {
+    console.log('Initial database connection test:', success ? 'SUCCESS' : 'FAILED');
+  })
+  .catch(error => {
+    console.error('Error during initial database connection test:', error);
+  });
+
+// Schedule periodic connection checks
+setInterval(async () => {
+  try {
+    const success = await testConnection();
+    _hasConnection = success;
+    console.log(`Periodic connection check: ${success ? 'Connected' : 'Disconnected'}`);
+  } catch (error) {
+    console.error('Error during periodic connection check:', error);
+    _hasConnection = false;
+  }
+}, 60000); // Check every minute
+
 module.exports = {
   query,
-  hasConnection,
+  get hasConnection() { 
+    return _hasConnection; 
+  },
   connect,
   disconnect,
   testConnection
