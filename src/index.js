@@ -8,6 +8,7 @@ const { initializeTables } = require('./db/migration');
 // Import routes
 const usersRoutes = require('./routes/users');
 const authRoutes = require('./routes/auth');
+const humanizeRoutes = require('./routes/humanize'); // Import the new humanize routes
 
 // Create Express app
 const app = express();
@@ -110,6 +111,7 @@ app.get('/', (req, res) => {
     endpoints: {
       users: `${API_PREFIX}/users`,
       auth: `${API_PREFIX}/auth`,
+      humanize: `${API_PREFIX}/humanize`, // Add the humanize endpoint
       health: '/health'
     }
   });
@@ -119,156 +121,4 @@ app.get('/', (req, res) => {
 app.get(API_PREFIX, (req, res) => {
   res.json({
     message: 'API v1',
-    status: 'online',
-    timestamp: new Date().toISOString(),
-    database_connected: db.hasConnection,
-    endpoints: {
-      users: `${API_PREFIX}/users`,
-      auth: `${API_PREFIX}/auth`,
-      health: '/health'
-    }
-  });
-});
-
-// Register routes - with database connection check middleware
-const dbCheckMiddleware = (req, res, next) => {
-  if (!db.hasConnection) {
-    return res.status(503).json({
-      error: 'Service Unavailable',
-      message: 'Database connection is not available. Please try again later.',
-      timestamp: new Date().toISOString()
-    });
-  }
-  next();
-};
-
-// Register routes with DB check middleware
-app.use(`${API_PREFIX}/users`, dbCheckMiddleware, usersRoutes);
-app.use(`${API_PREFIX}/auth`, authRoutes); // Auth routes handle DB connection checks internally
-
-// 404 handler
-app.use((req, res, next) => {
-  res.status(404).json({
-    error: 'Not Found',
-    message: `The requested resource '${req.originalUrl}' was not found on this server.`
-  });
-});
-
-// Error handler middleware
-app.use((err, req, res, next) => {
-  console.error('Unhandled error:', err);
-  
-  // Handle CORS errors specially
-  if (err.message === 'Not allowed by CORS') {
-    return res.status(403).json({
-      error: 'Forbidden',
-      message: 'CORS policy violation: origin not allowed',
-      details: 'The origin of this request is not allowed to access this resource'
-    });
-  }
-  
-  res.status(500).json({
-    error: 'Server Error',
-    message: err.message || 'An unexpected error occurred'
-  });
-});
-
-// Initialize database and start server
-async function startServer() {
-  let serverStarted = false;
-  const startTime = new Date().toISOString();
-  
-  // Start the server regardless of database connection
-  const server = app.listen(PORT, () => {
-    serverStarted = true;
-    console.log(`Server started in provisional mode on port ${PORT} at: ${startTime}`);
-    console.log(`Health check: /health`);
-    console.log(`Environment: ${process.env.NODE_ENV || 'development'}`);
-  });
-  
-  // Try to connect to the database
-  try {
-    console.log('Attempting database connection...');
-    
-    // Attempt database connection with retry logic
-    let connected = false;
-    let attempts = 0;
-    const maxAttempts = 5;
-    
-    while (!connected && attempts < maxAttempts) {
-      attempts++;
-      try {
-        connected = await db.connect();
-        if (connected) {
-          console.log(`Database connected successfully after ${attempts} attempt(s) at:`, new Date().toISOString());
-          break;
-        }
-      } catch (connectionError) {
-        console.error(`Database connection attempt ${attempts} failed:`, connectionError);
-        if (attempts < maxAttempts) {
-          console.log(`Waiting 3 seconds before retry...`);
-          await new Promise(resolve => setTimeout(resolve, 3000));
-        }
-      }
-    }
-    
-    if (!connected) {
-      console.error(`Failed to connect to database after ${maxAttempts} attempts`);
-      // Continue in limited mode
-      return;
-    }
-    
-    // Initialize database tables
-    try {
-      console.log('Creating database tables if needed...');
-      await initializeTables();
-      console.log('Database tables initialized at:', new Date().toISOString());
-      
-      // If we got here, the database is fully initialized
-      if (serverStarted) {
-        console.log(`Server now fully operational with database at: ${new Date().toISOString()}`);
-        console.log(`API endpoint: ${API_PREFIX}`);
-      }
-    } catch (migrationError) {
-      console.error('Error during database initialization:', migrationError);
-      // Continue with server running but migrations might have failed
-    }
-  } catch (error) {
-    console.error('Error during startup:', error);
-    // Server is already running in limited mode
-  }
-}
-
-// Run the startup procedure
-startServer().catch(error => {
-  console.error('Fatal error during startup:', error);
-});
-
-// Handle graceful shutdown
-process.on('SIGTERM', () => {
-  console.log('SIGTERM received, shutting down gracefully');
-  db.disconnect()
-    .then(() => {
-      console.log('Database disconnected successfully');
-      process.exit(0);
-    })
-    .catch(err => {
-      console.error('Error during database disconnection:', err);
-      process.exit(1);
-    });
-});
-
-process.on('SIGINT', () => {
-  console.log('SIGINT received, shutting down gracefully');
-  db.disconnect()
-    .then(() => {
-      console.log('Database disconnected successfully');
-      process.exit(0);
-    })
-    .catch(err => {
-      console.error('Error during database disconnection:', err);
-      process.exit(1);
-    });
-});
-
-module.exports = app;
+    status
