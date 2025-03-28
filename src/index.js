@@ -4,12 +4,10 @@ const morgan = require('morgan');
 const helmet = require('helmet');
 const db = require('./db');
 const { initializeTables } = require('./db/migration');
-const { createHumanizeTables, fixHumanizeTableConstraints } = require('./db/migrations/humanize_tables');
 
 // Import routes
 const usersRoutes = require('./routes/users');
 const authRoutes = require('./routes/auth');
-const humanizeRoutes = require('./routes/humanize');
 
 // Create Express app
 const app = express();
@@ -112,7 +110,6 @@ app.get('/', (req, res) => {
     endpoints: {
       users: `${API_PREFIX}/users`,
       auth: `${API_PREFIX}/auth`,
-      humanize: `${API_PREFIX}/humanize`,
       health: '/health'
     }
   });
@@ -128,7 +125,6 @@ app.get(API_PREFIX, (req, res) => {
     endpoints: {
       users: `${API_PREFIX}/users`,
       auth: `${API_PREFIX}/auth`,
-      humanize: `${API_PREFIX}/humanize`,
       health: '/health'
     }
   });
@@ -149,7 +145,6 @@ const dbCheckMiddleware = (req, res, next) => {
 // Register routes with DB check middleware
 app.use(`${API_PREFIX}/users`, dbCheckMiddleware, usersRoutes);
 app.use(`${API_PREFIX}/auth`, authRoutes); // Auth routes handle DB connection checks internally
-app.use(`${API_PREFIX}/humanize`, humanizeRoutes);
 
 // 404 handler
 app.use((req, res, next) => {
@@ -228,16 +223,6 @@ async function startServer() {
       console.log('Creating database tables if needed...');
       await initializeTables();
       console.log('Database tables initialized at:', new Date().toISOString());
-      
-      // Initialize humanize tables
-      console.log('Creating humanize tracking tables...');
-      await createHumanizeTables();
-      
-      // Fix any foreign key constraints that might be missing
-      console.log('Checking and fixing table relationships...');
-      await fixHumanizeTableConstraints();
-      
-      console.log('Humanize tables initialized');
       
       // If we got here, the database is fully initialized
       if (serverStarted) {
