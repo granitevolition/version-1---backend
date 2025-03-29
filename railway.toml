@@ -1,0 +1,18 @@
+# Railway configuration for application and worker services
+
+[build]
+builder = "nixpacks"
+
+# Application service configuration
+[[services]]
+name = "api"
+internal_port = 8080
+health_check_path = "/health"
+health_check_timeout_seconds = 10
+start_command = "npm run start"
+
+# Background worker service configuration
+[[services]]
+name = "worker"
+health_check_timeout_seconds = 60
+start_command = "npm run worker"
