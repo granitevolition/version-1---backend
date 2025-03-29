@@ -30,6 +30,35 @@ router.post('/test', async (req, res) => {
 });
 
 /**
+ * Direct humanize endpoint that bypasses authentication for testing
+ */
+router.post('/direct', async (req, res) => {
+  try {
+    const { content } = req.body;
+    
+    if (!content) {
+      return res.status(400).json({ error: 'No content provided' });
+    }
+    
+    // Call the humanize API using our utility
+    console.log(`Calling direct humanize with content: ${content.substring(0, 50)}...`);
+    const humanizedContent = await humanizeText(content);
+    
+    return res.status(200).json({
+      success: true,
+      originalContent: content,
+      humanizedContent
+    });
+  } catch (error) {
+    console.error('Error in direct humanize endpoint:', error);
+    return res.status(500).json({ 
+      error: 'Humanization failed',
+      message: error.message
+    });
+  }
+});
+
+/**
  * Humanize AI content based on user subscription level
  * 
  * Free users are limited to 500 words
