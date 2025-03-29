@@ -56,6 +56,90 @@ router.post('/direct-test', async (req, res) => {
 });
 
 /**
+ * Shortcut endpoint for immediate processing - bypasses the queue
+ * This provides backward compatibility with the frontend
+ */
+router.post('/direct', authenticateToken, async (req, res) => {
+  try {
+    const { content } = req.body;
+    
+    if (!content) {
+      return res.status(400).json({ error: 'No content provided' });
+    }
+    
+    // Get user profile from the database
+    const user = await db.query(
+      'SELECT users.id, users.email, subscriptions.plan_type, subscriptions.status FROM users LEFT JOIN subscriptions ON users.id = subscriptions.user_id WHERE users.id = $1',
+      [req.user.id]
+    );
+    
+    if (user.rows.length === 0) {
+      return res.status(404).json({ error: 'User not found' });
+    }
+    
+    const userProfile = user.rows[0];
+    
+    // Determine word limit based on subscription
+    let wordLimit = 500; // Default for free users
+    
+    if (userProfile.status === 'active') {
+      switch (userProfile.plan_type) {
+        case 'premium':
+          wordLimit = 2000;
+          break;
+        case 'business':
+          wordLimit = 5000;
+          break;
+        case 'enterprise':
+          wordLimit = 10000;
+          break;
+        default:
+          wordLimit = 500;
+      }
+    }
+    
+    // Count words in the content
+    const wordCount = content.split(/\s+/).filter(word => word.length > 0).length;
+    
+    if (wordCount > wordLimit) {
+      return res.status(403).json({ 
+        error: 'Word limit exceeded', 
+        wordCount,
+        wordLimit,
+        subscriptionStatus: userProfile.status,
+        planType: userProfile.plan_type || 'free'
+      });
+    }
+    
+    // Process text directly - no queue
+    console.log(`Direct processing ${wordCount} words for user ${req.user.id}`);
+    const humanizedContent = await humanizeText(content);
+    
+    // Log usage
+    await db.query(
+      'INSERT INTO humanize_usage (user_id, word_count, timestamp) VALUES ($1, $2, NOW())',
+      [req.user.id, wordCount]
+    );
+    
+    // Return in the format the frontend expects
+    return res.status(200).json({
+      success: true,
+      originalContent: content,
+      humanizedContent,
+      wordCount,
+      wordLimit
+    });
+    
+  } catch (error) {
+    console.error('Error in direct endpoint:', error);
+    return res.status(500).json({ 
+      error: 'The humanization service encountered an error. Please try again later.',
+      details: error.message
+    });
+  }
+});
+
+/**
  * Queue a humanization request
  * This endpoint adds the request to the queue instead of processing it synchronously
  */
@@ -99,7 +183,7 @@ router.post('/queue', authenticateToken, async (req, res) => {
     }
     
     // Count words in the content
-    const wordCount = content.split(/\\s+/).filter(word => word.length > 0).length;
+    const wordCount = content.split(/\s+/).filter(word => word.length > 0).length;
     
     if (wordCount > wordLimit) {
       return res.status(403).json({ 
@@ -291,7 +375,7 @@ router.post('/humanize', authenticateToken, async (req, res) => {
     }
     
     // Count words in the content
-    const wordCount = content.split(/\\s+/).filter(word => word.length > 0).length;
+    const wordCount = content.split(/\s+/).filter(word => word.length > 0).length;
     
     if (wordCount > wordLimit) {
       return res.status(403).json({ 
@@ -303,25 +387,30 @@ router.post('/humanize', authenticateToken, async (req, res) => {
       });
     }
     
+    // Process directly (no queue) for backward compatibility
     try {
-      // Add to queue and redirect to queue endpoint
-      const queuedRequest = await QueueService.addToQueue(req.user.id, content, wordCount);
+      // Call the humanize API using our utility
+      console.log(`Legacy endpoint: Direct processing ${wordCount} words for user ${req.user.id}`);
+      const humanizedContent = await humanizeText(content);
       
-      return res.status(202).json({
+      // Log usage for analytics and billing
+      await db.query(
+        'INSERT INTO humanize_usage (user_id, word_count, timestamp) VALUES ($1, $2, NOW())',
+        [req.user.id, wordCount]
+      );
+      
+      // Return in the expected format for backward compatibility
+      return res.status(200).json({
         success: true,
-        message: 'Humanization request queued',
-        requestId: queuedRequest.id,
-        status: queuedRequest.status,
-        queuedAt: queuedRequest.created_at,
         originalContent: content,
+        humanizedContent: humanizedContent,
         wordCount,
-        wordLimit,
-        note: 'Using async queue. Please use /humanize/status/:requestId to check status.'
+        wordLimit
       });
     } catch (apiError) {
-      console.error('Error calling external humanize API:', apiError.message);
+      console.error('Error calling humanize API:', apiError.message);
       return res.status(503).json({ 
-        error: 'The external humanization service is currently unavailable. This is likely a temporary issue with the service. Please try again later or contact support if the problem persists.',
+        error: 'The humanization service is currently unavailable. Please try again later.',
         details: apiError.message
       });
     }
