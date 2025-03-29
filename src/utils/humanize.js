@@ -12,46 +12,75 @@ function localHumanize(text) {
 
   console.log('Using local humanization fallback mechanism');
 
-  // Break text into sentences
-  const sentences = text.split(/(?<=[.!?])\s+/).filter(s => s.trim().length > 0);
+  // Break text into sentences - this pattern preserves the punctuation
+  const sentencePattern = /([^.!?]+[.!?]+)/g;
+  const sentences = text.match(sentencePattern) || [text];
+  
   if (sentences.length === 0) return text;
 
-  // Transformations to make text more conversational and varied
-  const transformedSentences = sentences.map((sentence, index) => {
-    // Skip very short sentences or keep first sentence as-is
-    if (sentence.length < 10 || index === 0) return sentence;
+  // Track which sentences we've modified to ensure we make changes
+  const modifiedIndices = new Set();
+  let modifiedCount = 0;
+  const targetModifications = Math.max(2, Math.ceil(sentences.length * 0.6)); // Modify at least 60% of sentences
 
-    // Randomly apply different transformations
-    const rand = Math.random();
+  // Copy of the sentences array for modification
+  let resultSentences = [...sentences];
 
-    // 30% chance to add a conversational opener
-    if (rand < 0.3) {
+  // First pass: Apply more aggressive transformations to specific sentences
+  for (let i = 0; i < sentences.length && modifiedCount < targetModifications; i++) {
+    const sentence = sentences[i].trim();
+    
+    // Skip very short sentences
+    if (sentence.length < 10) continue;
+    
+    // Apply a transformation based on sentence position
+    let transformed = false;
+    
+    if (i === 0) {
+      // First sentence transformations
+      const firstSentenceStarters = [
+        "Picture this: ",
+        "Imagine a world where ",
+        "Let me tell you about ",
+        "Here's something captivating: ",
+        "I love stories like this - ",
+      ];
+      const starter = firstSentenceStarters[Math.floor(Math.random() * firstSentenceStarters.length)];
+      resultSentences[i] = starter + sentence.charAt(0).toLowerCase() + sentence.slice(1);
+      transformed = true;
+    } 
+    else if (i === sentences.length - 1) {
+      // Last sentence transformations
+      const conclusionPhrases = [
+        sentence + " Quite a fascinating tale, isn't it?",
+        sentence + " This is the kind of story that really sticks with you.",
+        sentence + " Stories like this remind me why I love imagination.",
+        sentence + " What a wonderful journey through imagination."
+      ];
+      resultSentences[i] = conclusionPhrases[Math.floor(Math.random() * conclusionPhrases.length)];
+      transformed = true;
+    }
+    else if (i < sentences.length / 2 && i % 2 === 0) {
+      // Add conversational opener to some early sentences
       const openers = [
         "Interestingly, ", 
-        "In fact, ", 
-        "You know, ", 
-        "Actually, ", 
-        "To be honest, ", 
-        "Remarkably, ", 
-        "Surprisingly, ",
-        "Notably, ",
-        "I should mention that ",
-        "It's worth noting that "
+        "You know what's cool? ",
+        "I find it fascinating that ",
+        "It's amazing how ",
+        "What strikes me is that ",
       ];
       const opener = openers[Math.floor(Math.random() * openers.length)];
-      // Make sure the first letter is lowercase after the opener
-      return opener + sentence.charAt(0).toLowerCase() + sentence.slice(1);
+      resultSentences[i] = opener + sentence.charAt(0).toLowerCase() + sentence.slice(1);
+      transformed = true;
     } 
-    // 20% chance to add a mid-sentence bridge word
-    else if (rand < 0.5 && sentence.length > 20) {
+    else if (i >= sentences.length / 2 && sentence.length > 30) {
+      // Add a mid-sentence bridge word to some later, longer sentences
       const bridges = [
-        ", essentially, ",
-        ", basically, ",
-        ", in a way, ",
-        ", more or less, ",
-        ", you might say, ",
-        ", generally speaking, ",
-        ", somewhat surprisingly, "
+        ", interestingly enough, ",
+        ", and this is the best part, ",
+        " - and I love this - ",
+        ", which is really fascinating, ",
+        ", and you can imagine, "
       ];
       
       const bridge = bridges[Math.floor(Math.random() * bridges.length)];
@@ -59,45 +88,90 @@ function localHumanize(text) {
       let splitPoint = sentence.indexOf(' ', midpoint);
       if (splitPoint === -1) splitPoint = midpoint;
       
-      return sentence.slice(0, splitPoint) + bridge + sentence.slice(splitPoint);
-    } 
-    // 15% chance to reword common AI phrases
-    else if (rand < 0.65) {
-      return sentence
-        .replace(/it is important/gi, "it's crucial")
-        .replace(/very important/gi, "essential")
-        .replace(/very interesting/gi, "fascinating")
-        .replace(/very big/gi, "enormous")
-        .replace(/very small/gi, "tiny")
-        .replace(/in order to/gi, "to")
-        .replace(/a lot of/gi, "many")
-        .replace(/utilize/gi, "use")
-        .replace(/in conclusion/gi, "finally")
-        .replace(/for example/gi, "for instance")
-        .replace(/in my opinion/gi, "I think")
-        .replace(/nevertheless/gi, "even so")
-        .replace(/subsequently/gi, "later")
-        .replace(/furthermore/gi, "also")
-        .replace(/in addition/gi, "plus")
-        .replace(/therefore/gi, "so")
-        .replace(/consequently/gi, "as a result")
-        .replace(/despite the fact that/gi, "although");
+      resultSentences[i] = sentence.slice(0, splitPoint) + bridge + sentence.slice(splitPoint);
+      transformed = true;
     }
     
-    // Otherwise, keep the original sentence
-    return sentence;
-  });
-
-  // 50% chance to reorganize one sentence if text is long enough
-  if (transformedSentences.length > 3 && Math.random() > 0.5) {
-    const i = Math.floor(Math.random() * (transformedSentences.length - 2)) + 1;
-    // Swap two sentences
-    [transformedSentences[i], transformedSentences[i+1]] = 
-    [transformedSentences[i+1], transformedSentences[i]];
+    if (transformed) {
+      modifiedIndices.add(i);
+      modifiedCount++;
+    }
   }
 
-  // Add contractions to make text seem more casual
-  let result = transformedSentences.join(' ')
+  // Second pass: Do more general transformations for sentences we haven't modified yet
+  for (let i = 0; i < sentences.length && modifiedCount < targetModifications; i++) {
+    // Skip already modified sentences
+    if (modifiedIndices.has(i)) continue;
+    
+    const sentence = sentences[i].trim();
+    
+    // Skip very short sentences
+    if (sentence.length < 10) continue;
+    
+    // Apply word replacement transformations
+    const replacements = [
+      [/very important/gi, "crucial"],
+      [/very interesting/gi, "fascinating"],
+      [/very big/gi, "enormous"],
+      [/very small/gi, "tiny"],
+      [/in order to/gi, "to"],
+      [/a lot of/gi, "many"],
+      [/utilize/gi, "use"],
+      [/in conclusion/gi, "finally"],
+      [/for example/gi, "for instance"],
+      [/in my opinion/gi, "I think"],
+      [/nevertheless/gi, "even so"],
+      [/subsequently/gi, "later"],
+      [/furthermore/gi, "also"],
+      [/in addition/gi, "plus"],
+      [/therefore/gi, "so"],
+      [/consequently/gi, "as a result"],
+      [/despite the fact that/gi, "although"],
+      [/prior to/gi, "before"],
+      [/due to the fact that/gi, "because"],
+      [/in the event that/gi, "if"],
+      [/with regard to/gi, "about"],
+    ];
+    
+    let newSentence = sentence;
+    let madeReplacement = false;
+    
+    for (const [pattern, replacement] of replacements) {
+      if (pattern.test(newSentence)) {
+        newSentence = newSentence.replace(pattern, replacement);
+        madeReplacement = true;
+      }
+    }
+    
+    // If we couldn't find any pattern matches, try more aggressive transformations
+    if (!madeReplacement) {
+      // Try to add an intensifier or personal opinion
+      const intensifiers = [
+        " Really amazing, right?",
+        " I find that incredible.",
+        " That's pretty remarkable.",
+        " It's quite something, isn't it?",
+        " Fascinating, I'd say."
+      ];
+      
+      // 40% chance to add intensifier to end of sentence
+      if (Math.random() < 0.4) {
+        // Remove the ending punctuation, add the intensifier, then restore punctuation
+        const punctuation = newSentence.match(/[.!?]$/)[0] || '.';
+        newSentence = newSentence.slice(0, -1) + intensifiers[Math.floor(Math.random() * intensifiers.length)];
+        madeReplacement = true;
+      }
+    }
+    
+    if (madeReplacement) {
+      resultSentences[i] = newSentence;
+      modifiedIndices.add(i);
+      modifiedCount++;
+    }
+  }
+
+  // Third pass: Apply contractions to the entire text
+  let result = resultSentences.join(' ')
     .replace(/it is/g, "it's")
     .replace(/that is/g, "that's")
     .replace(/there is/g, "there's")
@@ -124,16 +198,9 @@ function localHumanize(text) {
     .replace(/we will/g, "we'll")
     .replace(/you will/g, "you'll");
   
-  // 20% chance to add a personal reflection at the end for longer texts
-  if (result.length > 200 && Math.random() < 0.2) {
-    const reflections = [
-      " I find this story quite captivating.",
-      " This reminds me of classic adventure tales.",
-      " What a wonderful narrative.",
-      " This is the kind of story that stays with you.",
-      " I can almost picture the scenes described here."
-    ];
-    result += reflections[Math.floor(Math.random() * reflections.length)];
+  // Check if we need to add a personal touch at the start
+  if (!result.includes("Picture this") && !result.includes("Imagine") && !result.includes("Let me tell")) {
+    result = "Here's a more conversational version: " + result;
   }
   
   return result;
