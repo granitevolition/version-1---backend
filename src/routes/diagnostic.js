@@ -5,7 +5,6 @@ const { testHumanizeAPI } = require('../utils/humanize');
 
 /**
  * Diagnostic API endpoints for testing connectivity and functionality
- * These endpoints are not protected by authentication to allow troubleshooting
  */
 
 // Health check endpoint (required for deployment platforms like Railway)
@@ -13,76 +12,117 @@ router.get('/health', (req, res) => {
   res.status(200).json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
-// Test database connection
-router.get('/db', async (req, res) => {
+// Direct API test with detailed response information
+router.get('/direct-api-test', async (req, res) => {
   try {
-    const db = require('../db');
-    const result = await db.query('SELECT NOW() as time');
-    res.status(200).json({ 
-      status: 'ok', 
-      message: 'Database connection successful', 
-      time: result.rows[0].time 
-    });
-  } catch (error) {
-    console.error('Database connection test failed:', error);
-    res.status(500).json({ 
-      status: 'error', 
-      message: 'Database connection failed', 
-      error: error.message 
-    });
-  }
-});
-
-// Test external API connectivity
-router.get('/api', async (req, res) => {
-  try {
-    const apiEndpoint = 'https://web-production-3db6c.up.railway.app/humanize_text';
-    const response = await axios({
-      method: 'get',
-      url: apiEndpoint,
-      timeout: 5000
-    });
+    // Test text that we know should work
+    const testText = "Once upon a time in a bustling city, a curious child named Leo stumbled upon a secret library.";
+    
+    // Make a direct call to the API with detailed logging
+    const apiUrl = 'https://web-production-3db6c.up.railway.app/humanize_text';
+    console.log(`[DIAGNOSTIC] Testing direct API call to ${apiUrl}`);
+    
+    // Try various combinations of request headers
+    const attempts = [
+      // Attempt 1: Browser-like headers with Origin and Referer
+      {
+        name: "browser-headers",
+        headers: {
+          'Content-Type': 'application/json',
+          'Accept': 'application/json, text/plain, */*',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+          'Origin': 'https://web-production-3db6c.up.railway.app',
+          'Referer': 'https://web-production-3db6c.up.railway.app/'
+        }
+      },
+      // Attempt 2: Minimal headers
+      {
+        name: "minimal-headers",
+        headers: {
+          'Content-Type': 'application/json'
+        }
+      },
+      // Attempt 3: Content-Type application/x-www-form-urlencoded
+      {
+        name: "form-encoded",
+        headers: {
+          'Content-Type': 'application/x-www-form-urlencoded',
+          'User-Agent': 'Mozilla/5.0'
+        },
+        formData: true
+      }
+    ];
+    
+    const results = [];
+    
+    for (const attempt of attempts) {
+      try {
+        console.log(`[DIAGNOSTIC] Trying ${attempt.name}`);
+        
+        const config = {
+          method: 'post',
+          url: apiUrl,
+          headers: attempt.headers,
+          timeout: 10000,
+          maxRedirects: 0
+        };
+        
+        if (attempt.formData) {
+          // Use URLSearchParams for form-encoded data
+          const params = new URLSearchParams();
+          params.append('text', testText);
+          config.data = params;
+        } else {
+          config.data = { text: testText };
+        }
+        
+        const response = await axios(config);
+        
+        results.push({
+          attempt: attempt.name,
+          status: response.status,
+          contentType: response.headers['content-type'],
+          dataType: typeof response.data,
+          isHtml: typeof response.data === 'string' && 
+                  (response.data.includes('<html') || 
+                   response.data.includes('<!DOCTYPE') ||
+                   response.data.includes('User Registration')),
+          dataPreview: typeof response.data === 'string' 
+            ? response.data.substring(0, 200) 
+            : JSON.stringify(response.data).substring(0, 200),
+          success: true
+        });
+      } catch (error) {
+        results.push({
+          attempt: attempt.name,
+          error: error.message,
+          response: error.response ? {
+            status: error.response.status,
+            headers: error.response.headers,
+            data: typeof error.response.data === 'string'
+              ? error.response.data.substring(0, 200)
+              : JSON.stringify(error.response.data).substring(0, 200)
+          } : null,
+          success: false
+        });
+      }
+    }
+    
+    // Run the standard test function for comparison
+    const standardTest = await testHumanizeAPI(testText);
     
     res.status(200).json({
-      status: 'ok',
-      message: 'External API connectivity check successful',
-      apiStatus: response.status,
-      apiResponse: typeof response.data === 'string' 
-        ? response.data.substring(0, 100) + '...' 
-        : response.data
+      timestamp: new Date().toISOString(),
+      apiUrl,
+      testText,
+      results,
+      standardTest
     });
   } catch (error) {
-    console.error('External API connectivity test failed:', error);
+    console.error('[DIAGNOSTIC] Error in direct-api-test:', error);
     res.status(500).json({
-      status: 'error',
-      message: 'External API connectivity check failed',
       error: error.message,
-      details: error.response ? {
-        status: error.response.status,
-        data: error.response.data
-      } : 'No response'
-    });
-  }
-});
-
-// Test humanization API with sample text
-router.get('/humanize', async (req, res) => {
-  try {
-    const sampleText = 'This is a test of the humanization API. Is it working properly?';
-    const result = await testHumanizeAPI(sampleText);
-    
-    res.status(200).json({
-      status: 'ok',
-      message: 'Humanization API test successful',
-      sampleText,
-      testResult: result
-    });
-  } catch (error) {
-    console.error('Humanization API test failed:', error);
-    res.status(500).json({
-      status: 'error',
-      message: 'Humanization API test failed',
-      error: error.message
+      stack: process.env.NODE_ENV === 'production' ? null : error.stack
     });
   }
 });
@@ -92,8 +132,7 @@ router.get('/system', async (req, res) => {
   const results = {
     server: { status: 'ok', message: 'Server is running' },
     database: { status: 'pending' },
-    externalApi: { status: 'pending' },
-    humanizationApi: { status: 'pending' }
+    externalApi: { status: 'pending' }
   };
   
   try {
@@ -113,42 +152,55 @@ router.get('/system', async (req, res) => {
     // Test external API connectivity
     try {
       const apiEndpoint = 'https://web-production-3db6c.up.railway.app/humanize_text';
+      const testText = "This is a test.";
+      
       const response = await axios({
-        method: 'get',
+        method: 'post',
         url: apiEndpoint,
+        data: { text: testText },
+        headers: { 
+          'Content-Type': 'application/json',
+          'User-Agent': 'Mozilla/5.0' 
+        },
         timeout: 5000
       });
       
-      results.externalApi = { 
-        status: 'ok', 
-        message: 'External API connectivity check successful', 
-        apiStatus: response.status 
-      };
+      const isHtml = typeof response.data === 'string' && 
+                    (response.data.includes('<html') || 
+                     response.data.includes('User Registration'));
+      
+      if (isHtml) {
+        results.externalApi = { 
+          status: 'error', 
+          message: 'API returned HTML instead of humanized text',
+          contentType: response.headers['content-type'],
+          preview: typeof response.data === 'string' 
+            ? response.data.substring(0, 200) 
+            : null
+        };
+      } else {
+        results.externalApi = { 
+          status: 'ok', 
+          message: 'External API connectivity check successful',
+          contentType: response.headers['content-type'],
+          dataType: typeof response.data,
+          preview: typeof response.data === 'string' 
+            ? response.data.substring(0, 200) 
+            : JSON.stringify(response.data).substring(0, 200)
+        };
+      }
     } catch (apiError) {
       results.externalApi = { 
         status: 'error', 
         message: 'External API connectivity check failed', 
-        error: apiError.message 
-      };
-    }
-    
-    // Test humanization
-    try {
-      const sampleText = 'This is a test of the humanization API.';
-      const testResult = await testHumanizeAPI(sampleText);
-      
-      results.humanizationApi = { 
-        status: 'ok', 
-        message: 'Humanization API test successful',
-        received: typeof testResult.fullData === 'string' 
-          ? testResult.fullData.substring(0, 100) + '...' 
-          : JSON.stringify(testResult.fullData).substring(0, 100) + '...'
-      };
-    } catch (humanizeError) {
-      results.humanizationApi = { 
-        status: 'error', 
-        message: 'Humanization API test failed', 
-        error: humanizeError.message 
+        error: apiError.message,
+        response: apiError.response ? {
+          status: apiError.response.status,
+          headers: apiError.response.headers,
+          data: typeof apiError.response.data === 'string'
+            ? apiError.response.data.substring(0, 200)
+            : JSON.stringify(apiError.response.data).substring(0, 200)
+        } : null
       };
     }
     
