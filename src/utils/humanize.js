@@ -45,13 +45,13 @@ const humanizeText = async (text) => {
     const response = await axios({
       method: 'post',
       url: apiEndpoint,
-      data: { text },
+      data: { text }, // IMPORTANT: The external API expects "text" not "content"
       headers: {
         'Content-Type': 'application/json',
-        'Accept': 'text/plain, application/json, */*'
+        'Accept': 'application/json, text/plain, */*'
       },
-      timeout: 15000, // 15 second timeout
-      validateStatus: status => status < 500 // Accept any status < 500 to handle API errors better
+      timeout: 30000, // 30 second timeout - increased for reliability
+      validateStatus: status => true // Accept any status to handle API errors better
     });
     
     console.log('External API response status:', response.status);
@@ -60,6 +60,11 @@ const humanizeText = async (text) => {
     // If the API returned an error status
     if (response.status >= 400) {
       console.error('API returned error status:', response.status);
+      console.error('Error response data:', 
+        typeof response.data === 'string' 
+          ? response.data.substring(0, 200) 
+          : JSON.stringify(response.data).substring(0, 200)
+      );
       throw new Error(`External API returned error status: ${response.status}`);
     }
     
@@ -69,14 +74,33 @@ const humanizeText = async (text) => {
       throw new Error('External API returned empty response');
     }
     
+    // Log full response for debugging
+    console.log('Full response data:', 
+      typeof response.data === 'string' 
+        ? response.data.substring(0, 200) + '...' 
+        : JSON.stringify(response.data).substring(0, 200) + '...'
+    );
+    
     // Handle string response (this is the expected format)
     if (typeof response.data === 'string') {
       // Check if it's HTML or an error page
       if (response.data.includes('<html') || 
           response.data.includes('<!doctype') || 
-          response.data.includes('<body')) {
+          response.data.includes('<body') ||
+          response.data.includes('User Registration') || // This is likely an error page
+          response.data.includes('<!DOCTYPE html>')) {
+        
         console.error('API returned HTML instead of humanized text');
         throw new Error('External API returned HTML instead of humanized text');
+      }
+      
+      // Check if it seems like an error message
+      if (response.data.includes('Error:') || 
+          response.data.includes('Exception:') ||
+          response.data.includes('Cannot ') ||
+          response.data.includes('Failed to')) {
+        console.error('API returned error message:', response.data);
+        throw new Error(`External API error: ${response.data.substring(0, 100)}`);
       }
       
       // Return the string directly
@@ -84,6 +108,12 @@ const humanizeText = async (text) => {
     } 
     // Handle object response (alternative format)
     else if (typeof response.data === 'object') {
+      // Check for error indicators in object response
+      if (response.data.error || response.data.message) {
+        console.error('API returned error object:', JSON.stringify(response.data));
+        throw new Error(response.data.error || response.data.message || 'External API error');
+      }
+      
       // Try to extract humanized text from known response formats
       if (response.data.humanized_text) {
         return response.data.humanized_text;
@@ -93,6 +123,8 @@ const humanizeText = async (text) => {
         return response.data.text;
       } else if (response.data.content) {
         return response.data.content;
+      } else if (response.data.output) {
+        return response.data.output;
       } else {
         // If we can't identify the format, log it and throw an error
         console.error('Unknown API response format:', JSON.stringify(response.data).substring(0, 200));
@@ -131,22 +163,37 @@ const testHumanizeAPI = async (text) => {
     const response = await axios({
       method: 'post',
       url: apiEndpoint,
-      data: { text },
-      headers: { 'Content-Type': 'application/json' },
-      timeout: 10000
+      data: { text }, // IMPORTANT: The external API expects "text" not "content"
+      headers: { 
+        'Content-Type': 'application/json',
+        'Accept': 'application/json, text/plain, */*'
+      },
+      timeout: 30000, // 30 second timeout
+      validateStatus: status => true // Accept any status to handle API errors better
     });
     
     console.log('Test API status:', response.status);
     console.log('Test API response type:', typeof response.data);
     console.log('Test API response preview:', 
       typeof response.data === 'string' 
-        ? response.data.substring(0, 100) 
-        : JSON.stringify(response.data).substring(0, 100));
+        ? response.data.substring(0, 300) 
+        : JSON.stringify(response.data).substring(0, 300));
     
-    return 'Test completed';
+    // Return the full response data for inspection
+    return {
+      status: response.status,
+      type: typeof response.data,
+      preview: typeof response.data === 'string' 
+        ? response.data.substring(0, 300) 
+        : JSON.stringify(response.data).substring(0, 300),
+      fullData: response.data
+    };
   } catch (error) {
     console.error('Test API error:', error.message);
-    return `Test failed: ${error.message}`;
+    return {
+      error: error.message,
+      fullError: error
+    };
   }
 };
 
