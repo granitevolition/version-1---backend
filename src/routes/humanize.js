@@ -2,7 +2,7 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 const { authenticateToken } = require('../utils/authMiddleware');
-const fetch = require('node-fetch');
+const { humanizeText } = require('../utils/humanize');
 
 /**
  * Humanize AI content based on user subscription level
@@ -50,7 +50,7 @@ router.post('/humanize', authenticateToken, async (req, res) => {
     }
     
     // Count words in the content
-    const wordCount = content.split(/\\s+/).filter(word => word.length > 0).length;
+    const wordCount = content.split(/\s+/).filter(word => word.length > 0).length;
     
     if (wordCount > wordLimit) {
       return res.status(403).json({ 
@@ -62,9 +62,8 @@ router.post('/humanize', authenticateToken, async (req, res) => {
       });
     }
     
-    // Call the actual AI humanizing service
-    // This would be your integration with an LLM or custom service
-    const humanizedContent = await humanizeContent(content);
+    // Call the humanize API using our utility
+    const humanizedContent = await humanizeText(content);
     
     // Log usage for analytics and billing
     await db.query(
@@ -85,50 +84,5 @@ router.post('/humanize', authenticateToken, async (req, res) => {
     return res.status(500).json({ error: 'Internal server error' });
   }
 });
-
-/**
- * The actual implementation of content humanizing
- * This would typically call an external AI API like OpenAI, Anthropic, etc.
- */
-async function humanizeContent(content) {
-  try {
-    // This is a placeholder - you would replace this with your actual humanizing service
-    // Example integration with OpenAI:
-    
-    /*
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`
-      },
-      body: JSON.stringify({
-        model: 'gpt-4',
-        messages: [
-          {
-            role: 'system',
-            content: 'You are an expert writer who makes AI-generated content sound more natural and human-written. Keep the same information but improve the style, tone, and flow.'
-          },
-          {
-            role: 'user',
-            content: `Please humanize the following content: ${content}`
-          }
-        ],
-        temperature: 0.7
-      })
-    });
-    
-    const data = await response.json();
-    return data.choices[0].message.content;
-    */
-    
-    // For now, we'll just return a modified version of the input
-    // Replace this with your actual humanizing logic or API call
-    return `[Humanized] ${content}`;
-  } catch (error) {
-    console.error('Error in humanization service:', error);
-    throw new Error('Failed to humanize content');
-  }
-}
 
 module.exports = router;
