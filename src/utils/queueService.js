@@ -138,15 +138,60 @@ class QueueService {
       // Process the humanization request
       try {
         // Call the humanization API
-        const humanizedText = await humanizeText(item.original_text);
+        let humanizedText = null;
+        let errorMessage = null;
         
-        // Update the item with the result
+        try {
+          humanizedText = await humanizeText(item.original_text);
+          
+          // Verify that we got a valid response (not HTML)
+          if (typeof humanizedText === 'string' && (
+            humanizedText.includes('<html') || 
+            humanizedText.includes('<!DOCTYPE') || 
+            humanizedText.includes('User Registration')
+          )) {
+            throw new Error('API returned HTML page instead of humanized text');
+          }
+        } catch (apiError) {
+          console.error(`[QUEUE] API error for item ${item.id}:`, apiError.message);
+          errorMessage = apiError.message;
+          
+          // Try to use local humanization as a fallback
+          const localFallback = item.original_text
+            .replace(/\b(AI|artificial intelligence)\b/gi, 'I')
+            .replace(/\b(therefore|hence|thus)\b/gi, 'so')
+            .replace(/\b(utilize|utilization)\b/gi, 'use')
+            .replace(/\b(additional)\b/gi, 'more')
+            .replace(/\b(demonstrate)\b/gi, 'show')
+            .replace(/\b(sufficient)\b/gi, 'enough')
+            .replace(/\b(possess|possesses)\b/gi, 'have')
+            .replace(/\b(regarding)\b/gi, 'about')
+            .replace(/\b(numerous)\b/gi, 'many')
+            .replace(/\b(commence|initiate)\b/gi, 'start')
+            .replace(/\b(terminate)\b/gi, 'end')
+            .replace(/\b(subsequently)\b/gi, 'then')
+            .replace(/\b(furthermore)\b/gi, 'also')
+            // Add sentence variety
+            .replace(/\. ([A-Z])/g, (match, p1) => {
+              const randomValue = Math.random();
+              if (randomValue < 0.1) return `, and ${p1.toLowerCase()}`;
+              if (randomValue < 0.2) return `! ${p1}`;
+              if (randomValue < 0.3) return `... ${p1}`;
+              return match;
+            });
+          
+          humanizedText = `[FALLBACK MODE] ${localFallback}`;
+          console.log(`[QUEUE] Using local fallback for item ${item.id}`);
+        }
+        
+        // Success case - update the item with the result
         await db.query(
           `UPDATE humanization_queue
           SET status = 'completed', humanized_text = $1, 
-              updated_at = NOW(), completed_at = NOW()
-          WHERE id = $2`,
-          [humanizedText, item.id]
+              updated_at = NOW(), completed_at = NOW(),
+              error_message = $2
+          WHERE id = $3`,
+          [humanizedText, errorMessage, item.id]
         );
         
         console.log(`[QUEUE] Successfully processed item ${item.id}`);
