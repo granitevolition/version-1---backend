@@ -26,34 +26,6 @@ const sanitizeHtml = (html) => {
 };
 
 /**
- * Attempts to identify if the response is an error page or not useful content
- * @param {string} text - Text to check
- * @returns {boolean} - True if it appears to be an error page
- */
-const isErrorPage = (text) => {
-  if (!text || typeof text !== 'string') return false;
-  
-  const errorIndicators = [
-    'You need to enable JavaScript',
-    '<!doctype html>',
-    '<html',
-    '<body>',
-    'Error',
-    '404',
-    '500',
-    'Not Found',
-    'Internal Server Error',
-    'JavaScript is required',
-    'enable JavaScript',
-    'User Registration'
-  ];
-  
-  return errorIndicators.some(indicator => 
-    text.toLowerCase().includes(indicator.toLowerCase())
-  );
-};
-
-/**
  * Sends text to the external humanizing API and returns the humanized content
  * 
  * @param {string} text - The text to humanize
@@ -64,64 +36,118 @@ const humanizeText = async (text) => {
   try {
     console.log('Calling external humanize API with text:', text.substring(0, 100) + '...');
     
-    const response = await axios.post('https://web-production-3db6c.up.railway.app/humanize_text', {
-      text
-    }, {
+    // API endpoint
+    const apiEndpoint = 'https://web-production-3db6c.up.railway.app/humanize_text';
+    
+    // Make a direct axios post request with detailed logging
+    console.log(`Sending request to ${apiEndpoint}`);
+    
+    const response = await axios({
+      method: 'post',
+      url: apiEndpoint,
+      data: { text },
       headers: {
         'Content-Type': 'application/json',
-        'Accept': 'text/plain'  // Try to request plain text
+        'Accept': 'text/plain, application/json, */*'
       },
-      timeout: 12000 // 12 second timeout
+      timeout: 15000, // 15 second timeout
+      validateStatus: status => status < 500 // Accept any status < 500 to handle API errors better
     });
     
+    console.log('External API response status:', response.status);
     console.log('External API response type:', typeof response.data);
     
-    // Handle different response formats from the external API
+    // If the API returned an error status
+    if (response.status >= 400) {
+      console.error('API returned error status:', response.status);
+      throw new Error(`External API returned error status: ${response.status}`);
+    }
+    
+    // Handle empty response
+    if (!response.data) {
+      console.error('API returned empty response');
+      throw new Error('External API returned empty response');
+    }
+    
+    // Handle string response (this is the expected format)
     if (typeof response.data === 'string') {
-      // API returned a string directly
-      const sanitized = sanitizeHtml(response.data);
-      
-      // Check if it looks like an error page
-      if (isErrorPage(sanitized)) {
-        throw new Error('API returned an error page');
+      // Check if it's HTML or an error page
+      if (response.data.includes('<html') || 
+          response.data.includes('<!doctype') || 
+          response.data.includes('<body')) {
+        console.error('API returned HTML instead of humanized text');
+        throw new Error('External API returned HTML instead of humanized text');
       }
       
-      return sanitized;
-    } else if (response.data && response.data.humanized_text) {
-      // API returned an object with humanized_text property
-      return sanitizeHtml(response.data.humanized_text);
-    } else if (response.data && response.data.result) {
-      // API returned an object with result property
-      return sanitizeHtml(response.data.result);
-    } else if (response.data && typeof response.data === 'object') {
-      // API returned an object, but we don't know the exact structure
-      // Try to find a property that might contain the humanized text
-      const possibleProps = ['text', 'content', 'output', 'humanized'];
-      for (const prop of possibleProps) {
-        if (response.data[prop] && typeof response.data[prop] === 'string') {
-          return sanitizeHtml(response.data[prop]);
-        }
+      // Return the string directly
+      return response.data;
+    } 
+    // Handle object response (alternative format)
+    else if (typeof response.data === 'object') {
+      // Try to extract humanized text from known response formats
+      if (response.data.humanized_text) {
+        return response.data.humanized_text;
+      } else if (response.data.result) {
+        return response.data.result;
+      } else if (response.data.text) {
+        return response.data.text;
+      } else if (response.data.content) {
+        return response.data.content;
+      } else {
+        // If we can't identify the format, log it and throw an error
+        console.error('Unknown API response format:', JSON.stringify(response.data).substring(0, 200));
+        throw new Error('External API returned unknown format');
       }
-      
-      // If we can't find a likely property, throw an error
-      throw new Error('Unknown response format from external API');
-    } else {
-      // Unexpected response format
-      throw new Error('Unexpected response format from external API');
+    } 
+    // Handle unexpected response type
+    else {
+      console.error('Unexpected response type:', typeof response.data);
+      throw new Error(`External API returned unexpected type: ${typeof response.data}`);
     }
   } catch (error) {
+    // Enhance error logging
     console.error('Error in humanizeText function:', error.message);
     
-    // Throw error to be handled by the route handler
     if (error.response) {
-      throw new Error(`External API returned status ${error.response.status}`);
+      console.error('API response error status:', error.response.status);
+      console.error('API response error data:', typeof error.response.data === 'string' 
+        ? error.response.data.substring(0, 200) 
+        : JSON.stringify(error.response.data).substring(0, 200));
     } else if (error.request) {
-      throw new Error('No response received from external API');
+      console.error('No response received from API');
     }
     
-    // Re-throw the error
-    throw error;
+    // Re-throw with clear message
+    throw new Error(error.message || 'Failed to humanize text via external API');
   }
 };
 
-module.exports = { humanizeText };
+// For testing, we'll add a simple function to make a direct request
+const testHumanizeAPI = async (text) => {
+  try {
+    const apiEndpoint = 'https://web-production-3db6c.up.railway.app/humanize_text';
+    console.log(`Testing direct API request to ${apiEndpoint}`);
+    
+    const response = await axios({
+      method: 'post',
+      url: apiEndpoint,
+      data: { text },
+      headers: { 'Content-Type': 'application/json' },
+      timeout: 10000
+    });
+    
+    console.log('Test API status:', response.status);
+    console.log('Test API response type:', typeof response.data);
+    console.log('Test API response preview:', 
+      typeof response.data === 'string' 
+        ? response.data.substring(0, 100) 
+        : JSON.stringify(response.data).substring(0, 100));
+    
+    return 'Test completed';
+  } catch (error) {
+    console.error('Test API error:', error.message);
+    return `Test failed: ${error.message}`;
+  }
+};
+
+module.exports = { humanizeText, testHumanizeAPI };
