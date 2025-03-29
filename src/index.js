@@ -9,7 +9,8 @@ const { initializeTables } = require('./db/migration');
 const usersRoutes = require('./routes/users');
 const authRoutes = require('./routes/auth');
 const humanizeRoutes = require('./routes/humanize'); // Import the humanize routes
-const diagnosticRoutes = require('./routes/diagnostic'); // Import the new diagnostic routes
+const diagnosticRoutes = require('./routes/diagnostic'); // Import the diagnostic routes
+const apiProxyRoutes = require('./routes/apiProxy'); // Import the new API proxy routes
 
 // Create Express app
 const app = express();
@@ -82,6 +83,14 @@ app.get('/health', (req, res) => {
           DATABASE_PUBLIC_URL_EXISTS: !!process.env.DATABASE_PUBLIC_URL,
           POSTGRES_URL_EXISTS: !!process.env.POSTGRES_URL
         }
+      },
+      apiProxy: {
+        status: 'available',
+        message: 'Enhanced Puppeteer API proxy enabled',
+        endpoints: {
+          health: '/api/proxy/health',
+          proxy: '/api/proxy/{path}'
+        }
       }
     }
   });
@@ -113,7 +122,8 @@ app.get('/', (req, res) => {
       users: `${API_PREFIX}/users`,
       auth: `${API_PREFIX}/auth`,
       humanize: `${API_PREFIX}/humanize`,
-      diagnostic: `${API_PREFIX}/diagnostic`, // Add the diagnostic endpoint
+      diagnostic: `${API_PREFIX}/diagnostic`,
+      apiProxy: '/api/proxy',
       health: '/health'
     }
   });
@@ -130,7 +140,8 @@ app.get(API_PREFIX, (req, res) => {
       users: `${API_PREFIX}/users`,
       auth: `${API_PREFIX}/auth`,
       humanize: `${API_PREFIX}/humanize`,
-      diagnostic: `${API_PREFIX}/diagnostic`, // Add the diagnostic endpoint
+      diagnostic: `${API_PREFIX}/diagnostic`,
+      apiProxy: '/api/proxy'
     }
   });
 });
@@ -139,7 +150,10 @@ app.get(API_PREFIX, (req, res) => {
 app.use(`${API_PREFIX}/users`, usersRoutes);
 app.use(`${API_PREFIX}/auth`, authRoutes);
 app.use(`${API_PREFIX}/humanize`, humanizeRoutes);
-app.use(`${API_PREFIX}/diagnostic`, diagnosticRoutes); // Register the diagnostic routes
+app.use(`${API_PREFIX}/diagnostic`, diagnosticRoutes);
+
+// Register API Proxy routes
+app.use('/api/proxy', apiProxyRoutes);
 
 // Also make diagnostic routes available without API prefix for easier access
 app.use('/diagnostic', diagnosticRoutes);
@@ -179,6 +193,7 @@ app.use((err, req, res, next) => {
       console.log(`Server running on port ${PORT}`);
       console.log(`Health check: http://localhost:${PORT}/health`);
       console.log(`API base: http://localhost:${PORT}${API_PREFIX}`);
+      console.log(`API Proxy: http://localhost:${PORT}/api/proxy`);
       console.log(`Diagnostic tools: http://localhost:${PORT}/diagnostic/system`);
     });
   } catch (err) {
