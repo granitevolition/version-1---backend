@@ -62,25 +62,33 @@ router.post('/humanize', authenticateToken, async (req, res) => {
       });
     }
     
-    // Call the humanize API using our utility
-    const humanizedContent = await humanizeText(content);
-    
-    // Log usage for analytics and billing
-    await db.query(
-      'INSERT INTO humanize_usage (user_id, word_count, timestamp) VALUES ($1, $2, NOW())',
-      [req.user.id, wordCount]
-    );
-    
-    return res.status(200).json({
-      success: true,
-      originalContent: content,
-      humanizedContent,
-      wordCount,
-      wordLimit
-    });
+    try {
+      // Call the humanize API using our utility
+      const humanizedContent = await humanizeText(content);
+      
+      // Log usage for analytics and billing
+      await db.query(
+        'INSERT INTO humanize_usage (user_id, word_count, timestamp) VALUES ($1, $2, NOW())',
+        [req.user.id, wordCount]
+      );
+      
+      return res.status(200).json({
+        success: true,
+        originalContent: content,
+        humanizedContent,
+        wordCount,
+        wordLimit
+      });
+    } catch (apiError) {
+      console.error('Error calling external humanize API:', apiError.message);
+      return res.status(503).json({ 
+        error: 'Humanization service temporarily unavailable. Please try again later.',
+        details: apiError.message
+      });
+    }
     
   } catch (error) {
-    console.error('Error humanizing content:', error);
+    console.error('Error in humanize endpoint:', error);
     return res.status(500).json({ error: 'Internal server error' });
   }
 });
