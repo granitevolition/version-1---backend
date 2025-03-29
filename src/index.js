@@ -8,7 +8,8 @@ const { initializeTables } = require('./db/migration');
 // Import routes
 const usersRoutes = require('./routes/users');
 const authRoutes = require('./routes/auth');
-const humanizeRoutes = require('./routes/humanize'); // Import the new humanize routes
+const humanizeRoutes = require('./routes/humanize'); // Import the humanize routes
+const diagnosticRoutes = require('./routes/diagnostic'); // Import the new diagnostic routes
 
 // Create Express app
 const app = express();
@@ -111,7 +112,8 @@ app.get('/', (req, res) => {
     endpoints: {
       users: `${API_PREFIX}/users`,
       auth: `${API_PREFIX}/auth`,
-      humanize: `${API_PREFIX}/humanize`, // Add the humanize endpoint
+      humanize: `${API_PREFIX}/humanize`,
+      diagnostic: `${API_PREFIX}/diagnostic`, // Add the diagnostic endpoint
       health: '/health'
     }
   });
@@ -127,7 +129,8 @@ app.get(API_PREFIX, (req, res) => {
     endpoints: {
       users: `${API_PREFIX}/users`,
       auth: `${API_PREFIX}/auth`,
-      humanize: `${API_PREFIX}/humanize`, // Add the humanize endpoint
+      humanize: `${API_PREFIX}/humanize`,
+      diagnostic: `${API_PREFIX}/diagnostic`, // Add the diagnostic endpoint
     }
   });
 });
@@ -135,7 +138,12 @@ app.get(API_PREFIX, (req, res) => {
 // Setup API routes
 app.use(`${API_PREFIX}/users`, usersRoutes);
 app.use(`${API_PREFIX}/auth`, authRoutes);
-app.use(`${API_PREFIX}/humanize`, humanizeRoutes); // Register the humanize routes
+app.use(`${API_PREFIX}/humanize`, humanizeRoutes);
+app.use(`${API_PREFIX}/diagnostic`, diagnosticRoutes); // Register the diagnostic routes
+
+// Also make diagnostic routes available without API prefix for easier access
+app.use('/diagnostic', diagnosticRoutes);
+app.use('/diag', diagnosticRoutes); // Shorter alias
 
 // 404 handler
 app.use((req, res, next) => {
@@ -171,6 +179,7 @@ app.use((err, req, res, next) => {
       console.log(`Server running on port ${PORT}`);
       console.log(`Health check: http://localhost:${PORT}/health`);
       console.log(`API base: http://localhost:${PORT}${API_PREFIX}`);
+      console.log(`Diagnostic tools: http://localhost:${PORT}/diagnostic/system`);
     });
   } catch (err) {
     console.error('Failed to start server:', err);
