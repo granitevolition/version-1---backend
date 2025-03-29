@@ -121,4 +121,62 @@ app.get('/', (req, res) => {
 app.get(API_PREFIX, (req, res) => {
   res.json({
     message: 'API v1',
-    status
+    status: 'online',
+    timestamp: new Date().toISOString(),
+    database_connected: db.hasConnection,
+    endpoints: {
+      users: `${API_PREFIX}/users`,
+      auth: `${API_PREFIX}/auth`,
+      humanize: `${API_PREFIX}/humanize`, // Add the humanize endpoint
+    }
+  });
+});
+
+// Setup API routes
+app.use(`${API_PREFIX}/users`, usersRoutes);
+app.use(`${API_PREFIX}/auth`, authRoutes);
+app.use(`${API_PREFIX}/humanize`, humanizeRoutes); // Register the humanize routes
+
+// 404 handler
+app.use((req, res, next) => {
+  res.status(404).json({
+    error: 'Not Found',
+    message: `Route ${req.method} ${req.originalUrl} not found`,
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Error handler
+app.use((err, req, res, next) => {
+  console.error(err.stack);
+  
+  const status = err.status || 500;
+  const message = err.message || 'Internal Server Error';
+  
+  res.status(status).json({
+    error: message,
+    status: status,
+    timestamp: new Date().toISOString()
+  });
+});
+
+// Start server
+(async () => {
+  try {
+    // Initialize DB tables if needed
+    await initializeTables();
+    
+    // Start the server
+    app.listen(PORT, () => {
+      console.log(`Server running on port ${PORT}`);
+      console.log(`Health check: http://localhost:${PORT}/health`);
+      console.log(`API base: http://localhost:${PORT}${API_PREFIX}`);
+    });
+  } catch (err) {
+    console.error('Failed to start server:', err);
+    process.exit(1);
+  }
+})();
+
+// Export for testing
+module.exports = app;
