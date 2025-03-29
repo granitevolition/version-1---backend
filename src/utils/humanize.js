@@ -1,10 +1,11 @@
 const axios = require('axios');
 const { directHumanize } = require('./humanizeProxy');
 const { puppeteerHumanize } = require('./puppeteerProxy');
+const { formHumanize } = require('./formHumanize');
 
 /**
  * Sends text to the external humanizing API and returns the humanized content
- * Now using multiple approaches with fallbacks for maximum reliability
+ * Uses multiple approaches with fallbacks for maximum reliability
  * 
  * @param {string} text - The text to humanize
  * @returns {string} - The humanized text
@@ -14,7 +15,25 @@ const humanizeText = async (text) => {
   try {
     console.log('[HUMANIZE] Processing request with text length:', text.length);
     
-    // First try the Puppeteer approach - the most reliable since it uses an actual browser engine
+    // Store errors for diagnostic purposes
+    const errors = [];
+    
+    // First try the form-based approach (new approach with cookie support)
+    try {
+      console.log('[HUMANIZE] Attempting form-based approach with cookie support');
+      const result = await formHumanize(text);
+      
+      if (result) {
+        console.log('[HUMANIZE] Form-based approach successful');
+        return result;
+      }
+    } catch (formError) {
+      console.error('[HUMANIZE] Form-based approach failed:', formError.message);
+      errors.push({ approach: 'form', error: formError.message });
+      // Continue to fallback methods
+    }
+    
+    // Next try the Puppeteer approach - the most reliable since it uses an actual browser engine
     try {
       console.log('[HUMANIZE] Attempting Puppeteer browser approach');
       const result = await puppeteerHumanize(text);
@@ -25,10 +44,11 @@ const humanizeText = async (text) => {
       }
     } catch (puppeteerError) {
       console.error('[HUMANIZE] Puppeteer browser failed:', puppeteerError.message);
+      errors.push({ approach: 'puppeteer', error: puppeteerError.message });
       // Continue to fallback methods
     }
     
-    // Next try the direct browser-like proxy implementation
+    // Then try the direct browser-like proxy implementation
     try {
       console.log('[HUMANIZE] Attempting direct browser-like proxy approach');
       const result = await directHumanize(text);
@@ -39,36 +59,34 @@ const humanizeText = async (text) => {
       }
     } catch (directError) {
       console.error('[HUMANIZE] Direct proxy failed:', directError.message);
+      errors.push({ approach: 'direct', error: directError.message });
       // Continue to fallback methods
     }
     
-    // Last resort: Try sending as form data instead of JSON
-    console.log('[HUMANIZE] Trying form data approach as last resort');
+    // Last resort: Try the CORS proxy approach
+    console.log('[HUMANIZE] Trying CORS proxy approach as last resort');
     
-    const apiEndpoint = 'https://web-production-3db6c.up.railway.app/humanize_text';
-    
-    // Prepare URLSearchParams
-    const params = new URLSearchParams();
-    params.append('text', text);
+    // Use a public CORS proxy service
+    const proxyUrl = 'https://corsproxy.io/?';
+    const targetUrl = 'https://web-production-3db6c.up.railway.app/humanize_text';
     
     const response = await axios({
       method: 'post',
-      url: apiEndpoint,
-      data: params,
+      url: proxyUrl + encodeURIComponent(targetUrl),
+      data: { text },
       headers: {
-        'Content-Type': 'application/x-www-form-urlencoded',
+        'Content-Type': 'application/json',
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        'Accept': 'application/json, text/plain, */*',
         'Accept-Language': 'en-US,en;q=0.9',
-        'Origin': 'https://web-production-3db6c.up.railway.app',
-        'Referer': 'https://web-production-3db6c.up.railway.app/'
+        'X-Requested-With': 'XMLHttpRequest'
       },
       timeout: 30000,
       validateStatus: () => true, // Accept any status code to handle errors manually
-      maxRedirects: 0 // Do not follow redirects
+      maxRedirects: 5
     });
     
-    console.log('[HUMANIZE] Form data approach response status:', response.status);
+    console.log('[HUMANIZE] CORS proxy approach response status:', response.status);
     
     // Check for HTML content in string responses
     if (typeof response.data === 'string' && (
@@ -76,7 +94,8 @@ const humanizeText = async (text) => {
         response.data.includes('<!DOCTYPE') || 
         response.data.includes('User Registration'))) {
       console.error('[HUMANIZE] API returned HTML instead of humanized text');
-      throw new Error('Server returned an HTML page. The humanization service may be temporarily unavailable.');
+      errors.push({ approach: 'cors-proxy', error: 'API returned HTML page' });
+      throw new Error('All API access approaches failed. Please see server logs for details.');
     }
     
     // Process the response based on its type
@@ -95,7 +114,7 @@ const humanizeText = async (text) => {
     
     throw new Error('Unexpected response format from humanization API');
   } catch (error) {
-    console.error('[HUMANIZE] Error:', error.message);
+    console.error('[HUMANIZE] All approaches failed:', error.message);
     throw error;
   }
 };
@@ -106,6 +125,23 @@ const humanizeText = async (text) => {
  */
 const testHumanizeAPI = async (text) => {
   const results = {};
+  
+  // Test form approach
+  try {
+    console.log('[TEST] Attempting form-based approach');
+    const formResult = await formHumanize(text);
+    results.form = {
+      success: true,
+      result: formResult,
+      preview: formResult ? formResult.substring(0, 100) + '...' : null
+    };
+  } catch (formError) {
+    console.error('[TEST] Form-based approach failed:', formError.message);
+    results.form = {
+      success: false,
+      error: formError.message
+    };
+  }
   
   // Test puppeteer approach
   try {
@@ -141,74 +177,24 @@ const testHumanizeAPI = async (text) => {
     };
   }
   
-  // Test form data approach
+  // Test CORS proxy approach
   try {
-    const apiEndpoint = 'https://web-production-3db6c.up.railway.app/humanize_text';
-    console.log(`[TEST] Testing form data approach to ${apiEndpoint}`);
-    
-    // Prepare URLSearchParams
-    const params = new URLSearchParams();
-    params.append('text', text);
+    const proxyUrl = 'https://corsproxy.io/?';
+    const targetUrl = 'https://web-production-3db6c.up.railway.app/humanize_text';
+    console.log(`[TEST] Testing CORS proxy approach to ${targetUrl}`);
     
     const response = await axios({
       method: 'post',
-      url: apiEndpoint,
-      data: params,
-      headers: { 
-        'Content-Type': 'application/x-www-form-urlencoded',
-        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.9'
-      },
-      timeout: 10000,
-      maxRedirects: 0
-    });
-    
-    // Check if the response contains HTML
-    const containsHtml = typeof response.data === 'string' && (
-      response.data.includes('<html') || 
-      response.data.includes('<!DOCTYPE') ||
-      response.data.includes('User Registration'));
-    
-    results.formData = {
-      success: !containsHtml,
-      status: response.status,
-      contentType: response.headers['content-type'],
-      type: typeof response.data,
-      containsHtml,
-      preview: typeof response.data === 'string' 
-        ? response.data.substring(0, 100) + '...' 
-        : JSON.stringify(response.data).substring(0, 100) + '...'
-    };
-  } catch (error) {
-    console.error('[TEST] Form data approach failed:', error.message);
-    results.formData = {
-      success: false,
-      error: error.message,
-      response: error.response ? {
-        status: error.response.status,
-        data: error.response.data ? error.response.data.substring(0, 100) + '...' : null
-      } : null
-    };
-  }
-  
-  // Test JSON approach
-  try {
-    const apiEndpoint = 'https://web-production-3db6c.up.railway.app/humanize_text';
-    console.log(`[TEST] Testing JSON approach to ${apiEndpoint}`);
-    
-    const response = await axios({
-      method: 'post',
-      url: apiEndpoint,
+      url: proxyUrl + encodeURIComponent(targetUrl),
       data: { text },
-      headers: { 
+      headers: {
         'Content-Type': 'application/json',
         'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
         'Accept': 'application/json, text/plain, */*',
-        'Accept-Language': 'en-US,en;q=0.9'
+        'X-Requested-With': 'XMLHttpRequest'
       },
       timeout: 10000,
-      maxRedirects: 0
+      maxRedirects: 5
     });
     
     // Check if the response contains HTML
@@ -217,7 +203,7 @@ const testHumanizeAPI = async (text) => {
       response.data.includes('<!DOCTYPE') ||
       response.data.includes('User Registration'));
     
-    results.json = {
+    results.corsProxy = {
       success: !containsHtml,
       status: response.status,
       contentType: response.headers['content-type'],
@@ -228,8 +214,8 @@ const testHumanizeAPI = async (text) => {
         : JSON.stringify(response.data).substring(0, 100) + '...'
     };
   } catch (error) {
-    console.error('[TEST] JSON approach failed:', error.message);
-    results.json = {
+    console.error('[TEST] CORS proxy approach failed:', error.message);
+    results.corsProxy = {
       success: false,
       error: error.message,
       response: error.response ? {
