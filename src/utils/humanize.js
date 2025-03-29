@@ -1,6 +1,28 @@
 const axios = require('axios');
 
 /**
+ * Checks if content is HTML
+ * @param {string} content - Content to check
+ * @returns {boolean} - True if content appears to be HTML
+ */
+const isHtmlContent = (content) => {
+  if (typeof content !== 'string') return false;
+  
+  // Check for common HTML indicators
+  const htmlIndicators = [
+    '<html', '</html>',
+    '<!doctype', '<!DOCTYPE',
+    '<body', '</body>',
+    '<div', '<p>',
+    'User Registration',
+    'enable JavaScript',
+    '<script', '</script>'
+  ];
+  
+  return htmlIndicators.some(indicator => content.includes(indicator));
+};
+
+/**
  * Sends text to the external humanizing API and returns the humanized content
  * 
  * @param {string} text - The text to humanize
@@ -29,22 +51,35 @@ const humanizeText = async (text) => {
     });
     
     console.log('External API response status:', response.status);
+    console.log('External API response type:', typeof response.data);
     
-    // If the response is a string, it's likely the humanized text
+    // Check for HTML content in string responses
     if (typeof response.data === 'string') {
+      if (isHtmlContent(response.data)) {
+        console.error('API returned HTML instead of humanized text');
+        console.error('HTML snippet:', response.data.substring(0, 200));
+        throw new Error('API returned HTML page instead of humanized text');
+      }
+      
+      // If it's not HTML, it's likely the humanized text
       return response.data;
     }
     
     // If the response is a JSON object, extract the result from known fields
     if (typeof response.data === 'object') {
+      // Check for error indicators
+      if (response.data.error) {
+        throw new Error(`API error: ${response.data.error}`);
+      }
+      
       if (response.data.result) {
         return response.data.result;
       } else if (response.data.humanized_text) {
         return response.data.humanized_text;
       } else {
-        // If we can't identify the format, stringify the response
+        // If we can't identify the format, log but don't return raw JSON
         console.warn('Unknown response format:', JSON.stringify(response.data).substring(0, 200));
-        return JSON.stringify(response.data);
+        throw new Error('Received unexpected format from humanization API');
       }
     }
     
@@ -60,7 +95,8 @@ const humanizeText = async (text) => {
         : JSON.stringify(error.response.data).substring(0, 200));
     }
     
-    throw new Error('Failed to humanize text: ' + (error.message || 'Unknown error'));
+    // Rethrow the error for the route handler to catch
+    throw error;
   }
 };
 
@@ -84,9 +120,13 @@ const testHumanizeAPI = async (text) => {
       timeout: 10000
     });
     
+    // Check if the response contains HTML
+    const containsHtml = typeof response.data === 'string' && isHtmlContent(response.data);
+    
     return {
       status: response.status,
       type: typeof response.data,
+      containsHtml,
       preview: typeof response.data === 'string' 
         ? response.data.substring(0, 300) 
         : JSON.stringify(response.data).substring(0, 300)
