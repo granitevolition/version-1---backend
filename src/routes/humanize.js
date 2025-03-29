@@ -30,6 +30,31 @@ router.post('/test', authenticateToken, async (req, res) => {
 });
 
 /**
+ * Direct test endpoint - use with caution
+ * This is mainly for diagnostic purposes
+ */
+router.post('/direct-test', async (req, res) => {
+  try {
+    const { text = 'Once upon a time, a curious child discovered a magical library.' } = req.body;
+    
+    console.log('Running direct test with text:', text);
+    const result = await humanizeText(text);
+    
+    return res.status(200).json({
+      success: true,
+      original: text,
+      humanized: result
+    });
+  } catch (error) {
+    console.error('Direct test failed:', error);
+    return res.status(500).json({
+      error: 'Direct test failed',
+      message: error.message
+    });
+  }
+});
+
+/**
  * Humanize AI content based on user subscription level
  * 
  * Free users are limited to 500 words
@@ -89,7 +114,7 @@ router.post('/humanize', authenticateToken, async (req, res) => {
     
     try {
       // Call the humanize API using our utility - passing the content parameter as text
-      console.log(`Calling humanizeText with content: ${content.substring(0, 50)}...`);
+      console.log(`Calling humanizeText with content (${wordCount} words): ${content.substring(0, 50)}...`);
       const humanizedContent = await humanizeText(content);
       console.log(`Received humanized content: ${humanizedContent.substring(0, 50)}...`);
       
@@ -109,7 +134,7 @@ router.post('/humanize', authenticateToken, async (req, res) => {
     } catch (apiError) {
       console.error('Error calling external humanize API:', apiError.message);
       return res.status(503).json({ 
-        error: 'Humanization service temporarily unavailable. Please try again later.',
+        error: 'The external humanization service is currently unavailable. This is likely a temporary issue with the service. Please try again later or contact support if the problem persists.',
         details: apiError.message
       });
     }
