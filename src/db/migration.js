@@ -1,139 +1,161 @@
-/**
- * Database migrations
- */
 const db = require('./index');
 
 /**
- * Initialize database tables
+ * Initialize database tables if they don't exist
+ * Will create required tables and add any missing columns
  */
 const initializeTables = async () => {
   try {
     console.log('Initializing database tables...');
     
-    // Check if tables exist first
-    const tablesExist = await checkTablesExist();
+    // Get database connection string for logging (mask password)
+    const connectionStr = process.env.DATABASE_URL || process.env.POSTGRES_URL || '';
+    const maskedConnectionStr = connectionStr.replace(/:[^:]*@/, ':**@');
+    console.log('Connecting to database using:', maskedConnectionStr);
     
-    if (tablesExist) {
+    // Test database connection
+    try {
+      const testResult = await db.query('SELECT NOW()');
+      console.log('Initial database connection test:', testResult.rows ? 'SUCCESS' : 'FAILED');
+    } catch (testError) {
+      console.error('Initial database connection test: FAILED');
+      console.error('Connection error:', testError.message);
+    }
+    
+    // Check if tables already exist before creating
+    const tableExists = await db.query(`
+      SELECT EXISTS (
+      SELECT FROM information_schema.tables 
+      WHERE table_schema = 'public' 
+      AND table_name = 'users'
+      );
+    `);
+    
+    console.log('Executed query:', {
+      text: tableExists.text,
+      duration: tableExists.duration,
+      rows: tableExists.rowCount
+    });
+    
+    if (tableExists.rows[0].exists) {
       console.log('Tables already exist, checking for missing columns...');
-      await addMissingColumns();
+      
+      // Get existing columns in users table
+      const userColumns = await db.query(`
+        SELECT column_name
+        FROM information_schema.columns
+        WHERE table_schema = 'public' AND table_name = 'users';
+      `);
+      
+      console.log('Executed query:', {
+        text: userColumns.text,
+        duration: userColumns.duration,
+        rows: userColumns.rowCount
+      });
+      
+      // Create the humanization_queue table if it doesn't exist
+      await db.query(`
+        CREATE TABLE IF NOT EXISTS humanization_queue (
+          id SERIAL PRIMARY KEY,
+          user_id INTEGER NOT NULL REFERENCES users(id),
+          original_text TEXT NOT NULL,
+          humanized_text TEXT,
+          status VARCHAR(20) NOT NULL DEFAULT 'pending',
+          attempts INTEGER NOT NULL DEFAULT 0,
+          created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+          updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+          completed_at TIMESTAMP WITH TIME ZONE,
+          error_message TEXT,
+          word_count INTEGER NOT NULL DEFAULT 0
+        );
+      `);
+      
+      // Create index on status for quick queue processing
+      await db.query(`
+        CREATE INDEX IF NOT EXISTS idx_humanization_queue_status ON humanization_queue(status);
+      `);
+      
+      // Create index on user_id for quick user lookups
+      await db.query(`
+        CREATE INDEX IF NOT EXISTS idx_humanization_queue_user_id ON humanization_queue(user_id);
+      `);
+      
+      console.log('Table migration completed successfully');
       return;
     }
     
-    // Create tables
+    // Create users table
     await db.query(`
       CREATE TABLE IF NOT EXISTS users (
         id SERIAL PRIMARY KEY,
-        username VARCHAR(50) UNIQUE NOT NULL,
-        password_hash VARCHAR(255) NOT NULL,
-        email VARCHAR(255) UNIQUE,
-        phone VARCHAR(20),
-        tier VARCHAR(20) DEFAULT 'free',
-        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-        updated_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-        last_login TIMESTAMP WITH TIME ZONE
+        email VARCHAR(255) UNIQUE NOT NULL,
+        password VARCHAR(255) NOT NULL,
+        first_name VARCHAR(100),
+        last_name VARCHAR(100),
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        verified BOOLEAN DEFAULT FALSE,
+        verification_token VARCHAR(255),
+        reset_token VARCHAR(255),
+        reset_token_expires TIMESTAMP WITH TIME ZONE
       );
-      
-      CREATE INDEX IF NOT EXISTS idx_users_username ON users(username);
-      CREATE INDEX IF NOT EXISTS idx_users_email ON users(email);
-      
-      -- Create user_sessions table for handling login sessions
-      CREATE TABLE IF NOT EXISTS user_sessions (
-        id SERIAL PRIMARY KEY,
-        user_id INTEGER NOT NULL,
-        session_token VARCHAR(255) UNIQUE NOT NULL,
-        expires_at TIMESTAMP WITH TIME ZONE NOT NULL,
-        created_at TIMESTAMP WITH TIME ZONE DEFAULT CURRENT_TIMESTAMP,
-        ip_address VARCHAR(45),
-        user_agent TEXT,
-        CONSTRAINT fk_user FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
-      );
-      
-      CREATE INDEX IF NOT EXISTS idx_user_sessions_token ON user_sessions(session_token);
     `);
     
-    console.log('Database tables initialized successfully');
+    // Create subscriptions table
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS subscriptions (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        plan_type VARCHAR(50) NOT NULL,
+        status VARCHAR(50) NOT NULL,
+        start_date TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        end_date TIMESTAMP WITH TIME ZONE,
+        created_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        updated_at TIMESTAMP WITH TIME ZONE DEFAULT NOW(),
+        payment_method VARCHAR(50),
+        payment_id VARCHAR(255),
+        UNIQUE(user_id)
+      );
+    `);
+    
+    // Create humanize_usage table
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS humanize_usage (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER REFERENCES users(id) ON DELETE CASCADE,
+        word_count INTEGER NOT NULL,
+        timestamp TIMESTAMP WITH TIME ZONE DEFAULT NOW()
+      );
+    `);
+    
+    // Create humanization_queue table
+    await db.query(`
+      CREATE TABLE IF NOT EXISTS humanization_queue (
+        id SERIAL PRIMARY KEY,
+        user_id INTEGER NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+        original_text TEXT NOT NULL,
+        humanized_text TEXT,
+        status VARCHAR(20) NOT NULL DEFAULT 'pending',
+        attempts INTEGER NOT NULL DEFAULT 0,
+        created_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+        updated_at TIMESTAMP WITH TIME ZONE NOT NULL DEFAULT NOW(),
+        completed_at TIMESTAMP WITH TIME ZONE,
+        error_message TEXT,
+        word_count INTEGER NOT NULL DEFAULT 0
+      );
+    `);
+    
+    // Create indices for performance
+    await db.query(`
+      CREATE INDEX IF NOT EXISTS idx_humanization_queue_status ON humanization_queue(status);
+      CREATE INDEX IF NOT EXISTS idx_humanization_queue_user_id ON humanization_queue(user_id);
+    `);
+    
+    console.log('Database tables created successfully');
   } catch (error) {
-    console.error('Error initializing database tables:', error);
+    console.error('Error initializing tables:', error);
     throw error;
   }
 };
 
-/**
- * Check if the required tables already exist
- */
-const checkTablesExist = async () => {
-  try {
-    const result = await db.query(`
-      SELECT EXISTS (
-        SELECT FROM information_schema.tables 
-        WHERE table_schema = 'public' 
-        AND table_name = 'users'
-      );
-    `);
-    
-    return result.rows[0].exists;
-  } catch (error) {
-    console.error('Error checking if tables exist:', error);
-    return false;
-  }
-};
-
-/**
- * Add any missing columns to existing tables
- */
-const addMissingColumns = async () => {
-  try {
-    // Get existing columns
-    const columns = await db.query(`
-      SELECT column_name
-      FROM information_schema.columns
-      WHERE table_schema = 'public' AND table_name = 'users';
-    `);
-    
-    const columnNames = columns.rows.map(row => row.column_name);
-    
-    // Add email column if it doesn't exist
-    if (!columnNames.includes('email')) {
-      console.log('Adding email column to users table');
-      await db.query(`
-        ALTER TABLE users
-        ADD COLUMN email VARCHAR(255) UNIQUE;
-      `);
-    }
-    
-    // Add phone column if it doesn't exist
-    if (!columnNames.includes('phone')) {
-      console.log('Adding phone column to users table');
-      await db.query(`
-        ALTER TABLE users
-        ADD COLUMN phone VARCHAR(20);
-      `);
-    }
-    
-    // Add last_login column if it doesn't exist
-    if (!columnNames.includes('last_login')) {
-      console.log('Adding last_login column to users table');
-      await db.query(`
-        ALTER TABLE users
-        ADD COLUMN last_login TIMESTAMP WITH TIME ZONE;
-      `);
-    }
-    
-    // Add tier column if it doesn't exist
-    if (!columnNames.includes('tier')) {
-      console.log('Adding tier column to users table');
-      await db.query(`
-        ALTER TABLE users
-        ADD COLUMN tier VARCHAR(20) DEFAULT 'free';
-      `);
-    }
-    
-    console.log('Table migration completed successfully');
-  } catch (error) {
-    console.error('Error during column migration:', error);
-  }
-};
-
-module.exports = {
-  initializeTables
-};
+module.exports = { initializeTables };
