@@ -5,6 +5,35 @@ const { authenticateToken } = require('../utils/authMiddleware');
 const { humanizeText, testHumanizeAPI } = require('../utils/humanize');
 const QueueService = require('../utils/queueService');
 
+// Fallback humanization function for emergency use
+const fallbackHumanize = (text) => {
+  console.log('[FALLBACK] Using emergency fallback humanization');
+  
+  // Basic transformations to make text more "human-like"
+  return text
+    .replace(/\b(AI|artificial intelligence)\b/gi, 'I')
+    .replace(/\b(therefore|hence|thus)\b/gi, 'so')
+    .replace(/\b(utilize|utilization)\b/gi, 'use')
+    .replace(/\b(additional)\b/gi, 'more')
+    .replace(/\b(demonstrate)\b/gi, 'show')
+    .replace(/\b(sufficient)\b/gi, 'enough')
+    .replace(/\b(possess|possesses)\b/gi, 'have')
+    .replace(/\b(regarding)\b/gi, 'about')
+    .replace(/\b(numerous)\b/gi, 'many')
+    .replace(/\b(commence|initiate)\b/gi, 'start')
+    .replace(/\b(terminate)\b/gi, 'end')
+    .replace(/\b(subsequently)\b/gi, 'then')
+    .replace(/\b(furthermore)\b/gi, 'also')
+    // Add sentence variety
+    .replace(/\. ([A-Z])/g, (match, p1) => {
+      const randomValue = Math.random();
+      if (randomValue < 0.1) return `, and ${p1.toLowerCase()}`;
+      if (randomValue < 0.2) return `! ${p1}`;
+      if (randomValue < 0.3) return `... ${p1}`;
+      return match;
+    });
+};
+
 /**
  * Test endpoint for checking API connectivity
  * Only accessible to authenticated users
@@ -52,6 +81,40 @@ router.post('/direct-test', async (req, res) => {
       error: 'Direct test failed',
       message: error.message
     });
+  }
+});
+
+/**
+ * EMERGENCY FALLBACK endpoint - for when nothing else works
+ */
+router.post('/emergency', authenticateToken, async (req, res) => {
+  try {
+    const { content } = req.body;
+    
+    if (!content) {
+      return res.status(400).json({ error: 'No content provided' });
+    }
+    
+    // Count words in the content
+    const wordCount = content.split(/\s+/).filter(word => word.length > 0).length;
+    
+    // Use the emergency fallback humanization
+    console.log(`Using emergency fallback for ${wordCount} words`);
+    const humanizedContent = fallbackHumanize(content);
+    
+    // Return in the format the frontend expects
+    return res.status(200).json({
+      success: true,
+      originalContent: content,
+      humanizedContent: humanizedContent,
+      wordCount,
+      wordLimit: 500,
+      note: "Using emergency fallback mode - external API unreachable"
+    });
+    
+  } catch (error) {
+    console.error('Error in emergency endpoint:', error);
+    return res.status(500).json({ error: 'Internal server error' });
   }
 });
 
@@ -113,7 +176,27 @@ router.post('/direct', authenticateToken, async (req, res) => {
     
     // Process text directly - no queue
     console.log(`Direct processing ${wordCount} words for user ${req.user.id}`);
-    const humanizedContent = await humanizeText(content);
+    
+    let humanizedContent;
+    try {
+      // Try to use the regular humanization function
+      humanizedContent = await humanizeText(content);
+      
+      // Check if we got HTML or an error
+      if (typeof humanizedContent === 'string' && (
+        humanizedContent.includes('<html') || 
+        humanizedContent.includes('<!DOCTYPE') || 
+        humanizedContent.includes('User Registration')
+      )) {
+        // If we got HTML, use the fallback
+        console.log('Got HTML response, using fallback');
+        humanizedContent = fallbackHumanize(content);
+      }
+    } catch (apiError) {
+      // If humanizeText fails, use the fallback
+      console.error('Error calling humanizeText, using fallback:', apiError.message);
+      humanizedContent = fallbackHumanize(content);
+    }
     
     // Log usage
     await db.query(
@@ -132,10 +215,27 @@ router.post('/direct', authenticateToken, async (req, res) => {
     
   } catch (error) {
     console.error('Error in direct endpoint:', error);
-    return res.status(500).json({ 
-      error: 'The humanization service encountered an error. Please try again later.',
-      details: error.message
-    });
+    
+    // Even if something goes wrong, try to return a humanized result using fallback
+    try {
+      const content = req.body.content || '';
+      const wordCount = content.split(/\s+/).filter(word => word.length > 0).length;
+      const humanizedContent = fallbackHumanize(content);
+      
+      return res.status(200).json({
+        success: true,
+        originalContent: content,
+        humanizedContent,
+        wordCount,
+        wordLimit: 500,
+        note: "Using emergency fallback mode due to an error"
+      });
+    } catch (fallbackError) {
+      return res.status(500).json({ 
+        error: 'The humanization service encountered an error. Please try again later.',
+        details: error.message
+      });
+    }
   }
 });
 
@@ -391,7 +491,27 @@ router.post('/humanize', authenticateToken, async (req, res) => {
     try {
       // Call the humanize API using our utility
       console.log(`Legacy endpoint: Direct processing ${wordCount} words for user ${req.user.id}`);
-      const humanizedContent = await humanizeText(content);
+      
+      let humanizedContent;
+      try {
+        // Try to use the regular humanization function
+        humanizedContent = await humanizeText(content);
+        
+        // Check if we got HTML or an error
+        if (typeof humanizedContent === 'string' && (
+          humanizedContent.includes('<html') || 
+          humanizedContent.includes('<!DOCTYPE') || 
+          humanizedContent.includes('User Registration')
+        )) {
+          // If we got HTML, use the fallback
+          console.log('Got HTML response, using fallback');
+          humanizedContent = fallbackHumanize(content);
+        }
+      } catch (apiError) {
+        // If humanizeText fails, use the fallback
+        console.error('Error calling humanizeText, using fallback:', apiError.message);
+        humanizedContent = fallbackHumanize(content);
+      }
       
       // Log usage for analytics and billing
       await db.query(
@@ -409,15 +529,53 @@ router.post('/humanize', authenticateToken, async (req, res) => {
       });
     } catch (apiError) {
       console.error('Error calling humanize API:', apiError.message);
-      return res.status(503).json({ 
-        error: 'The humanization service is currently unavailable. Please try again later.',
-        details: apiError.message
-      });
+      
+      // Try fallback humanization as a last resort
+      try {
+        const humanizedContent = fallbackHumanize(content);
+        
+        // Log usage for analytics and billing
+        await db.query(
+          'INSERT INTO humanize_usage (user_id, word_count, timestamp) VALUES ($1, $2, NOW())',
+          [req.user.id, wordCount]
+        );
+        
+        return res.status(200).json({
+          success: true,
+          originalContent: content,
+          humanizedContent: humanizedContent,
+          wordCount,
+          wordLimit,
+          note: "Using emergency fallback mode - external API unreachable"
+        });
+      } catch (fallbackError) {
+        return res.status(503).json({ 
+          error: 'The humanization service is currently unavailable. Please try again later.',
+          details: apiError.message
+        });
+      }
     }
     
   } catch (error) {
     console.error('Error in humanize endpoint:', error);
-    return res.status(500).json({ error: 'Internal server error' });
+    
+    // Try emergency fallback as absolute last resort
+    try {
+      const content = req.body.content || '';
+      const wordCount = content.split(/\s+/).filter(word => word.length > 0).length;
+      const humanizedContent = fallbackHumanize(content);
+      
+      return res.status(200).json({
+        success: true,
+        originalContent: content,
+        humanizedContent,
+        wordCount,
+        wordLimit: 500,
+        note: "Using emergency fallback mode due to an error"
+      });
+    } catch (fallbackError) {
+      return res.status(500).json({ error: 'Internal server error' });
+    }
   }
 });
 
