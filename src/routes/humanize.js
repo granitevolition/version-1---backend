@@ -2,7 +2,32 @@ const express = require('express');
 const router = express.Router();
 const db = require('../db');
 const { authenticateToken } = require('../utils/authMiddleware');
-const { humanizeText } = require('../utils/humanize');
+const { humanizeText, testHumanizeAPI } = require('../utils/humanize');
+
+/**
+ * Test endpoint for checking API connectivity
+ * Does not require authentication
+ */
+router.post('/test', async (req, res) => {
+  try {
+    const { text = 'This is a test of the humanization API.' } = req.body;
+    
+    // Call the test function
+    const result = await testHumanizeAPI(text);
+    
+    return res.status(200).json({
+      success: true,
+      message: 'API test completed',
+      result
+    });
+  } catch (error) {
+    console.error('Error in test endpoint:', error);
+    return res.status(500).json({ 
+      error: 'Test failed',
+      message: error.message
+    });
+  }
+});
 
 /**
  * Humanize AI content based on user subscription level
@@ -64,7 +89,9 @@ router.post('/humanize', authenticateToken, async (req, res) => {
     
     try {
       // Call the humanize API using our utility
+      console.log(`Calling humanizeText with content: ${content.substring(0, 50)}...`);
       const humanizedContent = await humanizeText(content);
+      console.log(`Received humanized content: ${humanizedContent.substring(0, 50)}...`);
       
       // Log usage for analytics and billing
       await db.query(
