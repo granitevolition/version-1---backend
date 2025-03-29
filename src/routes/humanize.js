@@ -6,9 +6,9 @@ const { humanizeText, testHumanizeAPI } = require('../utils/humanize');
 
 /**
  * Test endpoint for checking API connectivity
- * Does not require authentication
+ * Only accessible to authenticated users
  */
-router.post('/test', async (req, res) => {
+router.post('/test', authenticateToken, async (req, res) => {
   try {
     const { text = 'This is a test of the humanization API.' } = req.body;
     
@@ -24,35 +24,6 @@ router.post('/test', async (req, res) => {
     console.error('Error in test endpoint:', error);
     return res.status(500).json({ 
       error: 'Test failed',
-      message: error.message
-    });
-  }
-});
-
-/**
- * Direct humanize endpoint that bypasses authentication for testing
- */
-router.post('/direct', async (req, res) => {
-  try {
-    const { content } = req.body;
-    
-    if (!content) {
-      return res.status(400).json({ error: 'No content provided' });
-    }
-    
-    // Call the humanize API using our utility
-    console.log(`Calling direct humanize with content: ${content.substring(0, 50)}...`);
-    const humanizedContent = await humanizeText(content);
-    
-    return res.status(200).json({
-      success: true,
-      originalContent: content,
-      humanizedContent
-    });
-  } catch (error) {
-    console.error('Error in direct humanize endpoint:', error);
-    return res.status(500).json({ 
-      error: 'Humanization failed',
       message: error.message
     });
   }
@@ -117,7 +88,7 @@ router.post('/humanize', authenticateToken, async (req, res) => {
     }
     
     try {
-      // Call the humanize API using our utility
+      // Call the humanize API using our utility - passing the content parameter as text
       console.log(`Calling humanizeText with content: ${content.substring(0, 50)}...`);
       const humanizedContent = await humanizeText(content);
       console.log(`Received humanized content: ${humanizedContent.substring(0, 50)}...`);
