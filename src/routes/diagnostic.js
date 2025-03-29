@@ -1,7 +1,10 @@
 const express = require('express');
 const router = express.Router();
+const axios = require('axios');
+const FormData = require('form-data');
 const { testHumanizeAPI } = require('../utils/humanize');
 const { puppeteerHumanize } = require('../utils/puppeteerProxy');
+const { formHumanize } = require('../utils/formHumanize');
 const db = require('../db');
 const { authenticateToken } = require('../utils/authMiddleware');
 
@@ -63,9 +66,9 @@ router.get('/system', authenticateToken, async (req, res) => {
       if (dbStatus === 'connected') {
         const tablesResult = await db.query(`
           SELECT table_name, 
-                 (SELECT COUNT(*) FROM ${process.env.DB_NAME || 'information_schema'}.columns 
+                 (SELECT COUNT(*) FROM information_schema.columns 
                   WHERE table_name = t.table_name) as column_count
-          FROM ${process.env.DB_NAME || 'information_schema'}.tables t
+          FROM information_schema.tables t
           WHERE table_schema = 'public'
         `);
         
@@ -83,7 +86,8 @@ router.get('/system', authenticateToken, async (req, res) => {
       DB_HOST: process.env.DB_HOST ? '[redacted]' : 'not set',
       DB_USER: process.env.DB_USER ? '[redacted]' : 'not set',
       DB_NAME: process.env.DB_NAME ? '[redacted]' : 'not set',
-      JWT_SECRET: process.env.JWT_SECRET ? '[exists]' : 'not set'
+      JWT_SECRET: process.env.JWT_SECRET ? '[exists]' : 'not set',
+      PUPPETEER_EXECUTABLE_PATH: process.env.PUPPETEER_EXECUTABLE_PATH ? '[exists]' : 'not set'
     };
     
     return res.status(200).json({
@@ -163,6 +167,303 @@ router.get('/test-puppeteer', authenticateToken, async (req, res) => {
     return res.status(500).json({
       error: 'Puppeteer test failed',
       message: error.message
+    });
+  }
+});
+
+/**
+ * Endpoint to test only the form-based approach
+ * Restricted to authenticated users
+ */
+router.get('/test-form', authenticateToken, async (req, res) => {
+  try {
+    console.log('Testing form-based approach');
+    const text = 'This is a test of the form-based approach.';
+    
+    const startTime = Date.now();
+    const result = await formHumanize(text);
+    const duration = Date.now() - startTime;
+    
+    return res.status(200).json({
+      success: true,
+      approach: 'form',
+      duration: `${duration}ms`,
+      result
+    });
+  } catch (error) {
+    console.error('Form-based test error:', error);
+    return res.status(500).json({
+      error: 'Form-based test failed',
+      message: error.message
+    });
+  }
+});
+
+/**
+ * Comprehensive API connection test that tries all known methods
+ * This checks what's different between browser and server access
+ */
+router.get('/api-headers-test', authenticateToken, async (req, res) => {
+  try {
+    const results = [];
+    
+    // Test 1: Simple GET request to the main page
+    try {
+      console.log('Testing GET request to main page');
+      const mainPageResponse = await axios.get('https://web-production-3db6c.up.railway.app/', {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.9'
+        },
+        maxRedirects: 5,
+        timeout: 10000
+      });
+      
+      // Extract cookies if any
+      const cookies = mainPageResponse.headers['set-cookie'];
+      
+      results.push({
+        attempt: 'get-main-page',
+        success: true,
+        status: mainPageResponse.status,
+        cookies: cookies ? true : false,
+        cookieCount: cookies ? cookies.length : 0,
+        contentType: mainPageResponse.headers['content-type'],
+        isHtml: typeof mainPageResponse.data === 'string' && 
+                mainPageResponse.data.includes('<html')
+      });
+    } catch (error) {
+      results.push({
+        attempt: 'get-main-page',
+        success: false,
+        error: error.message,
+        status: error.response ? error.response.status : null
+      });
+    }
+    
+    // Test 2: JSON POST request
+    try {
+      console.log('Testing JSON POST request');
+      const jsonResponse = await axios.post(
+        'https://web-production-3db6c.up.railway.app/humanize_text',
+        { text: 'This is a test.' },
+        {
+          headers: {
+            'Content-Type': 'application/json',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+            'Accept': 'application/json, text/plain, */*',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Origin': 'https://web-production-3db6c.up.railway.app',
+            'Referer': 'https://web-production-3db6c.up.railway.app/'
+          },
+          timeout: 10000,
+          maxRedirects: 5
+        }
+      );
+      
+      results.push({
+        attempt: 'json-post',
+        success: true,
+        status: jsonResponse.status,
+        contentType: jsonResponse.headers['content-type'],
+        responseType: typeof jsonResponse.data,
+        isHtml: typeof jsonResponse.data === 'string' && 
+                (jsonResponse.data.includes('<html') || 
+                 jsonResponse.data.includes('User Registration')),
+        sample: typeof jsonResponse.data === 'string' 
+                ? jsonResponse.data.substring(0, 100) 
+                : JSON.stringify(jsonResponse.data).substring(0, 100)
+      });
+    } catch (error) {
+      results.push({
+        attempt: 'json-post',
+        success: false,
+        error: error.message,
+        status: error.response ? error.response.status : null,
+        isHtml: error.response && typeof error.response.data === 'string' && 
+                (error.response.data.includes('<html') || 
+                 error.response.data.includes('User Registration'))
+      });
+    }
+    
+    // Test 3: Form data POST request
+    try {
+      console.log('Testing Form Data POST request');
+      
+      const formData = new FormData();
+      formData.append('text', 'This is a test.');
+      
+      const formResponse = await axios.post(
+        'https://web-production-3db6c.up.railway.app/humanize_text',
+        formData,
+        {
+          headers: {
+            ...formData.getHeaders(),
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+            'Accept': 'application/json, text/plain, */*',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Origin': 'https://web-production-3db6c.up.railway.app',
+            'Referer': 'https://web-production-3db6c.up.railway.app/'
+          },
+          timeout: 10000,
+          maxRedirects: 5
+        }
+      );
+      
+      results.push({
+        attempt: 'form-data-post',
+        success: true,
+        status: formResponse.status,
+        contentType: formResponse.headers['content-type'],
+        responseType: typeof formResponse.data,
+        isHtml: typeof formResponse.data === 'string' && 
+                (formResponse.data.includes('<html') || 
+                 formResponse.data.includes('User Registration')),
+        sample: typeof formResponse.data === 'string' 
+                ? formResponse.data.substring(0, 100) 
+                : JSON.stringify(formResponse.data).substring(0, 100)
+      });
+    } catch (error) {
+      results.push({
+        attempt: 'form-data-post',
+        success: false,
+        error: error.message,
+        status: error.response ? error.response.status : null,
+        isHtml: error.response && typeof error.response.data === 'string' && 
+                (error.response.data.includes('<html') || 
+                 error.response.data.includes('User Registration'))
+      });
+    }
+    
+    // Test 4: URL encoded form POST request
+    try {
+      console.log('Testing URL encoded form POST request');
+      
+      const params = new URLSearchParams();
+      params.append('text', 'This is a test.');
+      
+      const urlEncodedResponse = await axios.post(
+        'https://web-production-3db6c.up.railway.app/humanize_text',
+        params,
+        {
+          headers: {
+            'Content-Type': 'application/x-www-form-urlencoded',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+            'Accept': 'application/json, text/plain, */*',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Origin': 'https://web-production-3db6c.up.railway.app',
+            'Referer': 'https://web-production-3db6c.up.railway.app/'
+          },
+          timeout: 10000,
+          maxRedirects: 5
+        }
+      );
+      
+      results.push({
+        attempt: 'url-encoded-post',
+        success: true,
+        status: urlEncodedResponse.status,
+        contentType: urlEncodedResponse.headers['content-type'],
+        responseType: typeof urlEncodedResponse.data,
+        isHtml: typeof urlEncodedResponse.data === 'string' && 
+                (urlEncodedResponse.data.includes('<html') || 
+                 urlEncodedResponse.data.includes('User Registration')),
+        sample: typeof urlEncodedResponse.data === 'string' 
+                ? urlEncodedResponse.data.substring(0, 100) 
+                : JSON.stringify(urlEncodedResponse.data).substring(0, 100)
+      });
+    } catch (error) {
+      results.push({
+        attempt: 'url-encoded-post',
+        success: false,
+        error: error.message,
+        status: error.response ? error.response.status : null,
+        isHtml: error.response && typeof error.response.data === 'string' && 
+                (error.response.data.includes('<html') || 
+                 error.response.data.includes('User Registration'))
+      });
+    }
+    
+    // Test 5: Session-based sequence (get main page with cookies, then post with cookies)
+    try {
+      console.log('Testing session-based sequence');
+      
+      // First get the main page to establish a session
+      const sessionPageResponse = await axios.get('https://web-production-3db6c.up.railway.app/', {
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.9'
+        },
+        maxRedirects: 5,
+        timeout: 10000
+      });
+      
+      // Extract cookies
+      const cookies = sessionPageResponse.headers['set-cookie'];
+      const cookieHeader = cookies ? cookies.join('; ') : '';
+      
+      // Make the API call with cookies
+      const sessionApiResponse = await axios.post(
+        'https://web-production-3db6c.up.railway.app/humanize_text',
+        { text: 'This is a test.' },
+        {
+          headers: {
+            'Content-Type': 'application/json',
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+            'Accept': 'application/json, text/plain, */*',
+            'Accept-Language': 'en-US,en;q=0.9',
+            'Origin': 'https://web-production-3db6c.up.railway.app',
+            'Referer': 'https://web-production-3db6c.up.railway.app/',
+            'Cookie': cookieHeader
+          },
+          timeout: 10000,
+          maxRedirects: 5
+        }
+      );
+      
+      results.push({
+        attempt: 'session-based',
+        success: true,
+        hasCookies: cookies ? true : false,
+        cookieCount: cookies ? cookies.length : 0,
+        status: sessionApiResponse.status,
+        contentType: sessionApiResponse.headers['content-type'],
+        responseType: typeof sessionApiResponse.data,
+        isHtml: typeof sessionApiResponse.data === 'string' && 
+                (sessionApiResponse.data.includes('<html') || 
+                 sessionApiResponse.data.includes('User Registration')),
+        sample: typeof sessionApiResponse.data === 'string' 
+                ? sessionApiResponse.data.substring(0, 100) 
+                : JSON.stringify(sessionApiResponse.data).substring(0, 100)
+      });
+    } catch (error) {
+      results.push({
+        attempt: 'session-based',
+        success: false,
+        error: error.message,
+        status: error.response ? error.response.status : null,
+        isHtml: error.response && typeof error.response.data === 'string' && 
+                (error.response.data.includes('<html') || 
+                 error.response.data.includes('User Registration'))
+      });
+    }
+    
+    return res.status(200).json({
+      timestamp: new Date().toISOString(),
+      testResults: results,
+      summary: {
+        totalTests: results.length,
+        successfulTests: results.filter(r => r.success).length,
+        htmlResponses: results.filter(r => r.isHtml).length
+      }
+    });
+  } catch (error) {
+    console.error('API headers test error:', error);
+    return res.status(500).json({
+      error: error.message,
+      stack: error.stack
     });
   }
 });
