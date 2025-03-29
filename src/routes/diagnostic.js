@@ -5,6 +5,7 @@ const FormData = require('form-data');
 const { testHumanizeAPI } = require('../utils/humanize');
 const { puppeteerHumanize } = require('../utils/puppeteerProxy');
 const { formHumanize } = require('../utils/formHumanize');
+const { humanizeText } = require('../utils/humanize');
 const db = require('../db');
 const { authenticateToken } = require('../utils/authMiddleware');
 
@@ -139,6 +140,32 @@ router.get('/direct-api-test', authenticateToken, async (req, res) => {
       timestamp: new Date().toISOString(),
       error: error.message,
       status: 'error'
+    });
+  }
+});
+
+/**
+ * Emergency test endpoint that directly humanizes text with local fallback
+ * Can be used to verify if the system works in emergency situations
+ */
+router.post('/emergency-test', async (req, res) => {
+  try {
+    const { text = 'Once upon a time, there was a magical kingdom where everyone lived happily.' } = req.body;
+    
+    console.log('Running emergency test with text:', text);
+    const result = await humanizeText(text);
+    
+    return res.status(200).json({
+      success: true,
+      original: text,
+      humanized: result,
+      note: "This emergency endpoint always uses local fallback if needed"
+    });
+  } catch (error) {
+    console.error('Emergency test failed:', error);
+    return res.status(500).json({
+      error: 'Emergency test failed',
+      message: error.message
     });
   }
 });
@@ -450,13 +477,90 @@ router.get('/api-headers-test', authenticateToken, async (req, res) => {
       });
     }
     
+    // Test 6: Exact browser headers test
+    try {
+      console.log('Testing with exact browser headers');
+      
+      const exactBrowserResponse = await axios({
+        method: 'post',
+        url: 'https://web-production-3db6c.up.railway.app/humanize_text',
+        data: { text: 'This is a test with exact browser headers.' },
+        headers: {
+          'Content-Type': 'application/json',
+          'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/121.0.0.0 Safari/537.36',
+          'Accept': 'application/json, text/plain, */*',
+          'Accept-Language': 'en-US,en;q=0.9',
+          'Accept-Encoding': 'gzip, deflate, br',
+          'Connection': 'keep-alive',
+          'Origin': 'https://web-production-3db6c.up.railway.app',
+          'Referer': 'https://web-production-3db6c.up.railway.app/',
+          'Sec-Fetch-Dest': 'empty',
+          'Sec-Fetch-Mode': 'cors',
+          'Sec-Fetch-Site': 'same-origin',
+          'Pragma': 'no-cache',
+          'Cache-Control': 'no-cache'
+        },
+        timeout: 30000,
+        validateStatus: () => true,
+        maxRedirects: 0
+      });
+      
+      results.push({
+        attempt: 'exact-browser-headers',
+        success: true,
+        status: exactBrowserResponse.status,
+        contentType: exactBrowserResponse.headers['content-type'],
+        responseType: typeof exactBrowserResponse.data,
+        isHtml: typeof exactBrowserResponse.data === 'string' && 
+                (exactBrowserResponse.data.includes('<html') || 
+                 exactBrowserResponse.data.includes('User Registration')),
+        sample: typeof exactBrowserResponse.data === 'string' 
+                ? exactBrowserResponse.data.substring(0, 100) 
+                : JSON.stringify(exactBrowserResponse.data).substring(0, 100)
+      });
+    } catch (error) {
+      results.push({
+        attempt: 'exact-browser-headers',
+        success: false,
+        error: error.message,
+        status: error.response ? error.response.status : null,
+        isHtml: error.response && typeof error.response.data === 'string' && 
+                (error.response.data.includes('<html') || 
+                 error.response.data.includes('User Registration'))
+      });
+    }
+    
+    // Test 7: Try the real humanizeText function
+    try {
+      console.log('Testing actual humanizeText function');
+      
+      const humanizedResult = await humanizeText('This is a test of the actual humanizeText function.');
+      
+      results.push({
+        attempt: 'humanize-text-function',
+        success: true,
+        isHtml: typeof humanizedResult === 'string' && 
+                (humanizedResult.includes('<html') || 
+                 humanizedResult.includes('User Registration')),
+        result: humanizedResult.substring(0, 100) + (humanizedResult.length > 100 ? '...' : ''),
+        usedFallback: humanizedResult.includes('[FALLBACK MODE]')
+      });
+    } catch (error) {
+      results.push({
+        attempt: 'humanize-text-function',
+        success: false,
+        error: error.message
+      });
+    }
+    
     return res.status(200).json({
       timestamp: new Date().toISOString(),
       testResults: results,
       summary: {
         totalTests: results.length,
         successfulTests: results.filter(r => r.success).length,
-        htmlResponses: results.filter(r => r.isHtml).length
+        htmlResponses: results.filter(r => r.isHtml).length,
+        fallbackUsed: results.some(r => r.success && r.usedFallback)
       }
     });
   } catch (error) {
