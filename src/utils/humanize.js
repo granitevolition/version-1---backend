@@ -24,6 +24,7 @@ const isHtmlContent = (content) => {
 
 /**
  * Sends text to the external humanizing API and returns the humanized content
+ * Using browser-like headers to prevent redirects to login pages
  * 
  * @param {string} text - The text to humanize
  * @returns {string} - The humanized text
@@ -36,7 +37,7 @@ const humanizeText = async (text) => {
     // API endpoint
     const apiEndpoint = 'https://web-production-3db6c.up.railway.app/humanize_text';
     
-    // Make a direct axios post request with detailed logging
+    // Make a direct axios post request with browser-like headers
     console.log(`Sending request to ${apiEndpoint}`);
     
     const response = await axios({
@@ -45,8 +46,13 @@ const humanizeText = async (text) => {
       data: { text }, // IMPORTANT: The external API expects "text" not "content"
       headers: {
         'Content-Type': 'application/json',
-        'Accept': 'application/json, text/plain, */*'
+        'Accept': 'application/json, text/plain, */*',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        'Origin': 'https://web-production-3db6c.up.railway.app',
+        'Referer': 'https://web-production-3db6c.up.railway.app/'
       },
+      maxRedirects: 0, // Prevent following redirects
+      validateStatus: status => status < 400, // Only treat HTTP errors as errors
       timeout: 30000 // 30 second timeout
     });
     
@@ -109,14 +115,19 @@ const testHumanizeAPI = async (text) => {
     const apiEndpoint = 'https://web-production-3db6c.up.railway.app/humanize_text';
     console.log(`Testing API connection to ${apiEndpoint}`);
     
+    // Use the same browser-like headers for consistency
     const response = await axios({
       method: 'post',
       url: apiEndpoint,
       data: { text }, // IMPORTANT: The external API expects "text" not "content"
       headers: { 
         'Content-Type': 'application/json',
-        'Accept': 'application/json, text/plain, */*'
+        'Accept': 'application/json, text/plain, */*',
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36',
+        'Origin': 'https://web-production-3db6c.up.railway.app',
+        'Referer': 'https://web-production-3db6c.up.railway.app/'
       },
+      maxRedirects: 0,
       timeout: 10000
     });
     
@@ -134,7 +145,11 @@ const testHumanizeAPI = async (text) => {
   } catch (error) {
     console.error('Test API error:', error.message);
     return {
-      error: error.message
+      error: error.message,
+      response: error.response ? {
+        status: error.response.status,
+        data: error.response.data ? error.response.data.substring(0, 300) : null
+      } : null
     };
   }
 };
